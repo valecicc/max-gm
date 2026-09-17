@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
-<title>MAX GM V1.4 — Consigli automatici</title>
+<title>MAX GM V1.5.3 — Scambi multipli stress tested</title>
 <!-- PWA / installazione -->
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#07111f">
@@ -1870,7 +1870,7 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  const VERSION='V1.4';
  const $=id=>document.getElementById(id);
  const clamp13=(x,a,b)=>Math.max(a,Math.min(b,x));
- function brand13(){const v=document.querySelector('.version');if(v&&v.textContent!=='V1.4 · CONSIGLI')v.textContent='V1.4.1 · CONSIGLI';document.title='MAX GM V1.4.1 — Consigli automatici';const f=$('appFooter');if(f){const txt=`MAX GM V1.4.1 · ${DB?.meta?.name||''} · Formazione · Scambi · Consigli automatici · Dati · Analisi lega · PWA`;if(f.textContent!==txt)f.textContent=txt}}
+ function brand13(){const v=document.querySelector('.version');if(v&&v.textContent!=='V1.4 · CONSIGLI')v.textContent='V1.4.3 · IDEE FIX';document.title='MAX GM V1.4.3 — Idee automatiche';const f=$('appFooter');if(f){const txt=`MAX GM V1.4.3 · ${DB?.meta?.name||''} · Formazione · Scambi · Idee automatiche · Dati · Analisi lega · PWA`;if(f.textContent!==txt)f.textContent=txt}}
  function groupsForPlayer(p){const rr=roles(p),out=[];for(const [g,gd] of Object.entries(GROUPS))if([...rr].some(r=>gd.roles.includes(r)))out.push(g);return out}
  function bestNeed(team,p){const n=needForPlayer(roster(team),p);return n}
  function playerExpendability(team,rec){
@@ -2067,9 +2067,9 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
   .market-controls{grid-template-columns:1fr!important}.market-head h2{font-size:20px}.market-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.market-hero-row{grid-template-columns:1fr auto}.market-maintrade{font-size:19px}.market-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.market-method-grid{grid-template-columns:1fr}.market-card-actions button{width:100%}
 }
 </style>
-<script id="maxgm-v14-auto-market">
+<script id="maxgm-v142-auto-market">
 (function(){
- const VERSION='V1.4.1';
+ const VERSION='V1.4.3';
  const $=id=>document.getElementById(id),cl=(x,a=0,b=100)=>Math.max(a,Math.min(b,x));
  function futureProjection(p){
    const q=Number.isFinite(+p.quality)?+p.quality:50;
@@ -2079,127 +2079,400 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    return cl(q*.42+targ*.23+fvm*.17+fm*.10+baseRating(p)*.08);
  }
  function safeMarket(team,rec){try{return window.MAXGM_V13.perceivedMarketValue(team,rec)}catch(e){return baseRating(rec.p)}}
- function safePulse(team,rec){try{return tradeWeeklyPulse(team,rec)}catch(e){return 0}}
  function safeComp(team,rec){try{return matchComponents(rec.p,rec,team)}catch(e){return null}}
  function statusOf(team,rec){try{return String(getMatchInput(team,rec.key).status||'ok').toLowerCase()}catch(e){return 'ok'}}
  function available(arr,team,inKey,inOwner){return arr.filter(r=>statusOf(r.key===inKey?inOwner:team,r)!=='out')}
- function currentXi(team,arr,inKey=null,inOwner=null){
+ function lineupObj(team,arr,inKey=null,inOwner=null,scoreFn=null){
    const av=available(arr,team,inKey,inOwner);
-   try{const z=bestLineup(av,(p,r)=>matchScore(p,r,r.key===inKey?inOwner:team));return z?.best?.score??null}catch(e){const z=bestLineup(av);return z?.best?.score??null}
+   try{
+     const fn=scoreFn||((p,r)=>matchScore(p,r,r.key===inKey?inOwner:team));
+     const z=bestLineup(av,fn),b=z?.best||null;
+     if(!b)return {score:null,keys:new Set(),module:'—'};
+     const keys=new Set([b.keeper.key,...b.picks.map(x=>x[1].key)]);
+     return {score:b.score,keys,module:b.module};
+   }catch(e){return {score:null,keys:new Set(),module:'—'}}
  }
- function staticXi(arr){return bestLineup(arr)?.best?.score??0}
- function futureXi(arr){return bestLineup(arr,(p)=>futureProjection(p))?.best?.score??0}
+ function staticLineup(arr){const z=bestLineup(arr),b=z?.best||null;return b?{score:b.score,keys:new Set([b.keeper.key,...b.picks.map(x=>x[1].key)]),module:b.module}:{score:0,keys:new Set(),module:'—'}}
+ function futureLineup(arr){const z=bestLineup(arr,(p)=>futureProjection(p)),b=z?.best||null;return b?{score:b.score,keys:new Set([b.keeper.key,...b.picks.map(x=>x[1].key)]),module:b.module}:{score:0,keys:new Set(),module:'—'}}
  function qualityConf(team,rec){const c=safeComp(team,rec);return c&&Number.isFinite(+c.confidence)?+c.confidence:55}
+ function groupDiff(before,after){
+   const deltas={}; let worst=0,best=0,critical=false,criticalGroups=[];
+   for(const g of Object.keys(before.groups)){
+     const d=(after.groups[g]?.score||0)-(before.groups[g]?.score||0);deltas[g]=d;worst=Math.min(worst,d);best=Math.max(best,d);
+     const aft=after.groups[g]?.score||0,bef=before.groups[g]?.score||0;
+     if(d<=-5.5 && aft<62){critical=true;criticalGroups.push(g)}
+     if(bef>=68 && aft<58){critical=true;criticalGroups.push(g)}
+   }
+   return {deltas,worst,best,critical,criticalGroups:[...new Set(criticalGroups)]};
+ }
  function sellNeedInfo(team,p){const rr=roles(p),hits=[];for(const [g,gd] of Object.entries(GROUPS)){if([...rr].some(r=>gd.roles.includes(r))){const h=groupHealth(roster(team),g);hits.push({group:g,health:h.score,need:Math.max(0,78-h.score)})}}return hits.sort((a,b)=>b.need-a.need)[0]||{group:'—',health:100,need:0}}
+ function roleRank(team,rec){
+   const gs=[];for(const [g,gd] of Object.entries(GROUPS)){if([...roles(rec.p)].some(r=>gd.roles.includes(r))){const vals=leagueRolePlayers(team,g);const idx=vals.findIndex(x=>x.key===rec.key);if(idx>=0)gs.push({g,rank:idx+1,n:gd.n,count:vals.length})}}
+   return gs.sort((a,b)=>a.rank-b.rank)[0]||{g:'—',rank:99,n:0,count:0};
+ }
+ function coreInfo(team,rec,nowKeys,futureKeys){
+   const ownNeed=sellNeedInfo(team,rec.p),rr=roleRank(team,rec),isNow=nowKeys.has(rec.key),isFuture=futureKeys.has(rec.key);
+   let score=(isNow?32:0)+(isFuture?24:0)+Math.max(0,18-ownNeed.health*.10)+(rr.rank<=rr.n?15:rr.rank<=rr.n+1?7:0);
+   return {score:cl(score),isNow,isFuture,ownNeed,rank:rr};
+ }
+ function sameUsefulArea(a,b){
+   const ga=new Set(Object.entries(GROUPS).filter(([g,gd])=>[...roles(a.p)].some(r=>gd.roles.includes(r))).map(x=>x[0]));
+   const gb=new Set(Object.entries(GROUPS).filter(([g,gd])=>[...roles(b.p)].some(r=>gd.roles.includes(r))).map(x=>x[0]));
+   return [...ga].some(g=>gb.has(g));
+ }
  function reason(c){
    const bits=[];
-   if(c.xiNowDelta>1.5)bits.push(`migliora subito il tuo XI (+${c.xiNowDelta.toFixed(1)})`);
-   else if(c.staticXiDelta>1.5)bits.push(`alza il valore del miglior XI (+${c.staticXiDelta.toFixed(1)})`);
-   if(c.structDelta>.45)bits.push(`rinforza la struttura della rosa (+${c.structDelta.toFixed(1)})`);
-   if(c.timing>4)bits.push('buon timing: compri valore prospettico e/o vendi alto');
-   if(c.futureXiDelta>2)bits.push(`migliora anche la proiezione futura dell'XI (+${c.futureXiDelta.toFixed(1)})`);
-   if(c.d.interest>=70)bits.push(`${c.d.tb} ha forte bisogno del profilo che cedi`);
-   if(c.d.realism>=68)bits.push('trattativa abbastanza realistica');
-   if(!bits.length)bits.push('migliora il rapporto tra valore, fit di rosa e realismo della trattativa');
+   if(c.xiNowDelta>1.2)bits.push(`migliora davvero l'XI di oggi (+${c.xiNowDelta.toFixed(1)})`);
+   if(c.futureXiDelta>1.3)bits.push(`alza anche l'XI prospettico (+${c.futureXiDelta.toFixed(1)})`);
+   if(c.structDelta>.55)bits.push(`migliora l'equilibrio della rosa (+${c.structDelta.toFixed(1)})`);
+   if(c.roleDiff.best>5)bits.push(`copre una tua carenza reale (${c.bestGainGroup})`);
+   if(c.oppBenefit>0.8)bits.push(`${c.d.tb} ha un vantaggio tecnico concreto ad ascoltarti`);
+   if(c.d.realism>=65)bits.push('la trattativa è credibile');
+   if(!bits.length)bits.push('è una delle poche operazioni che supera tutti i filtri di valore, ruolo e realismo');
    return bits.slice(0,3).join(' · ')+'.';
+ }
+ function caution(c){
+   const bits=[];
+   if(c.core.score>=55)bits.push('stai cedendo un giocatore importante della tua rotazione');
+   if(c.d.realism<60)bits.push('la controparte potrebbe chiedere un rilancio');
+   if(c.marketGap>10)bits.push('il giocatore richiesto ha valore percepito più alto');
+   if(c.xiNowDelta<.8)bits.push('il vantaggio immediato sull’XI è limitato');
+   if(c.futureXiDelta<.8)bits.push('il guadagno futuro non è netto');
+   return bits.slice(0,2).join(' · ');
  }
  function tags(c){
    const x=[];
-   if(c.xiNowDelta>1.5)x.push(['XI SUBITO','good']);
-   if(c.futureXiDelta>2||c.timing>4)x.push(['FUTURO','gold']);
-   if(c.structDelta>.45)x.push(['COPRE CARENZA','good']);
-   if(c.d.realism>=68)x.push(['REALISTICO','good']);
+   if(c.xiNowDelta>1.2)x.push(['XI SUBITO','good']);
+   if(c.futureXiDelta>1.3)x.push(['FUTURO','gold']);
+   if(c.roleDiff.best>5)x.push(['COPRE CARENZA','good']);
+   if(c.d.realism>=65)x.push(['REALISTICO','good']);
    if(c.d.interest>=75)x.push(['LEVA ALTA','warn']);
-   if(c.sellHigh>4)x.push(['VENDI ALTO','gold']);
-   if(c.buyLow>4)x.push(['COMPRA BASSO','gold']);
+   if(c.timing>4)x.push(['TIMING','gold']);
    return x.slice(0,4);
  }
  function autoMarket(team){
    const A=roster(team),api=window.MAXGM_V13;if(!A.length||!api)return {results:[],weak:null};
-   const baseStruct=structure(A),baseStatic=staticXi(A),baseFuture=futureXi(A),baseNow=currentXi(team,A);
+   const baseStruct=structure(A),baseStatic=staticLineup(A),baseFuture=futureLineup(A),baseNow=lineupObj(team,A);
    let quick=[];
    for(const a of A){
      const pack=api.searchSmartTrades(team,a.key),all=pack.allResults||pack.results||[];
-     for(const d of all.slice(0,8)){
+     const core=coreInfo(team,a,baseNow.keys,baseFuture.keys);
+     for(const d of all.slice(0,10)){
        const curA=safeMarket(team,a),curB=safeMarket(d.tb,d.b),fA=futureProjection(a.p),fB=futureProjection(d.b.p),buyLow=fB-curB,sellHigh=curA-fA,timing=buyLow+sellHigh;
-       const timingN=cl(50+timing*2.2),qs=d.recommendation*.42+d.forUs*.18+d.realism*.16+timingN*.16+d.interest*.08;
-       if(d.forUs>=43&&d.realism>=32)quick.push({a,d,curA,curB,fA,fB,buyLow,sellHigh,timing,qs});
+       const marketGap=curB-curA;
+       // Primo filtro: niente proposte assurde già a livello rapido.
+       if(d.forUs<50||d.realism<42)continue;
+       if(Math.abs(marketGap)>22 && !(d.realism>=68&&d.interest>=70))continue;
+       if(core.score>=68 && d.forUs<66)continue;
+       const qs=d.recommendation*.38+d.forUs*.16+d.realism*.18+d.interest*.08+cl(50+timing*2)*.08+(100-Math.min(100,Math.abs(marketGap)*4))*.12;
+       quick.push({a,d,curA,curB,fA,fB,buyLow,sellHigh,timing,marketGap,qs,core});
      }
    }
-   quick.sort((x,y)=>y.qs-x.qs);quick=quick.slice(0,10);
+   quick.sort((x,y)=>y.qs-x.qs);quick=quick.slice(0,18);
    const exact=[];
+   const oppBase=new Map();
    for(const q of quick){
-     const {a,d}=q,A2=replacePlayer(A,a.key,d.b),st2=structure(A2),n2=currentXi(team,A2,d.b.key,d.tb);
-     const sellNeed=sellNeedInfo(team,a.p),roleSwing=(d.needIn.need-sellNeed.need);
-     const xiNowDelta=(n2==null||baseNow==null)?0:n2-baseNow;
-     const staticXiDelta=(baseRating(d.b.p)-baseRating(a.p))*.30+roleSwing*.04;
-     const futureXiDelta=(q.fB-q.fA)*.35+roleSwing*.03;
+     const {a,d}=q,B=roster(d.tb);
+     if(!oppBase.has(d.tb))oppBase.set(d.tb,{struct:structure(B),now:lineupObj(d.tb,B),future:futureLineup(B),static:staticLineup(B)});
+     const ob=oppBase.get(d.tb),A2=replacePlayer(A,a.key,d.b),B2=replacePlayer(B,d.b.key,a);
+     const st2=structure(A2),bst2=structure(B2),n2=lineupObj(team,A2,d.b.key,d.tb),bn2=lineupObj(d.tb,B2,a.key,team),s2=staticLineup(A2),f2=futureLineup(A2),bf2=futureLineup(B2);
+     const xiNowDelta=(n2.score==null||baseNow.score==null)?0:n2.score-baseNow.score;
+     const staticXiDelta=s2.score-baseStatic.score;
+     const futureXiDelta=f2.score-baseFuture.score;
      const structDelta=st2.score-baseStruct.score;
-     const xiNowN=cl(50+xiNowDelta*3.1),xiFutureN=cl(50+futureXiDelta*2.5),structN=cl(50+structDelta*7.5),timingN=cl(50+q.timing*2.2);
+     const oppNowDelta=(bn2.score==null||ob.now.score==null)?0:bn2.score-ob.now.score;
+     const oppFutureDelta=bf2.score-ob.future.score;
+     const oppStructDelta=bst2.score-ob.struct.score;
+     const oppBenefit=oppNowDelta*.45+oppFutureDelta*.28+oppStructDelta*.27;
+     const roleDiff=groupDiff(baseStruct,st2),oppRoleDiff=groupDiff(ob.struct,bst2);
+     const bestGainGroup=Object.entries(roleDiff.deltas).sort((x,y)=>y[1]-x[1])[0]?.[0]||'—';
+     const sameArea=sameUsefulArea(a,d.b),needIn=d.needIn?.need||0;
+     // Regole dure: meglio nessuna idea che un'idea strana.
+     if(roleDiff.critical)continue;
+     if(xiNowDelta<-1.35||futureXiDelta<-1.25||structDelta<-.75)continue;
+     if(oppNowDelta<-2.2&&oppStructDelta<-.8&&d.realism<72)continue;
+     if(q.core.score>=62 && xiNowDelta<1.0 && futureXiDelta<1.4)continue;
+     if(!sameArea && needIn<9 && roleDiff.best<4.5)continue;
+     if(q.marketGap>15 && d.realism<62)continue;
+     if(q.marketGap<-18 && xiNowDelta<1.4 && futureXiDelta<1.5)continue;
+     const clearGain=xiNowDelta>.65||futureXiDelta>.9||structDelta>.35||roleDiff.best>4.5;
+     if(!clearGain)continue;
+     const parity=cl(100-Math.abs(q.marketGap)*4.0);
+     const xiNowN=cl(50+xiNowDelta*5.0),xiFutureN=cl(50+futureXiDelta*4.0),structN=cl(50+structDelta*9),timingN=cl(50+q.timing*1.8),oppN=cl(50+oppBenefit*5.0);
      const dataConf=(qualityConf(team,a)+qualityConf(d.tb,d.b))/2;
-     let score=xiNowN*.23+xiFutureN*.18+structN*.14+timingN*.13+d.forUs*.12+d.realism*.12+d.interest*.08;
-     score=score*(.90+.10*dataConf/100);
-     // Evita di premiare operazioni che non migliorano nulla e penalizza forte perdita di XI.
-     if(xiNowDelta<-2.5)score-=8;if(staticXiDelta<-3)score-=7;if(structDelta<-1.2)score-=5;
-     const sellStatus=statusOf(team,a);if((sellStatus==='out'||sellStatus==='doubt')&&q.sellHigh<0)score-=sellStatus==='out'?9:4;
-     const c={...q,xiNowDelta,staticXiDelta,futureXiDelta,structDelta,dataConf,score:cl(score)};c.reason=reason(c);c.tags=tags(c);exact.push(c);
+     let score=xiNowN*.27+xiFutureN*.20+structN*.14+d.realism*.15+d.interest*.07+oppN*.08+parity*.06+timingN*.03;
+     score=score*(.92+.08*dataConf/100);
+     if(q.core.score>=55)score-=Math.max(0,3.5-xiNowDelta)*1.4;
+     if(d.realism<55)score-=4;
+     if(oppBenefit<-.8)score-=3;
+     if(roleDiff.best<2&&xiNowDelta<1)score-=2;
+     const c={...q,xiNowDelta,staticXiDelta,futureXiDelta,structDelta,oppNowDelta,oppFutureDelta,oppStructDelta,oppBenefit,roleDiff,oppRoleDiff,bestGainGroup,dataConf,score:cl(score)};
+     c.reason=reason(c);c.caution=caution(c);c.tags=tags(c);exact.push(c);
    }
    exact.sort((a,b)=>b.score-a.score);
-   const filtered=exact.filter(c=>c.score>=54&&c.d.forUs>=47&&(c.xiNowDelta>.4||c.staticXiDelta>.6||c.futureXiDelta>.8||c.structDelta>.2||c.timing>2));
+   const filtered=exact.filter(c=>c.score>=60&&c.d.forUs>=55&&c.d.realism>=50&&(c.xiNowDelta>.65||c.futureXiDelta>.9||c.structDelta>.35));
    const chosen=[],outCount=new Map(),teamCount=new Map(),inKeys=new Set();
-   for(const c of (filtered.length?filtered:exact)){
+   for(const c of filtered){
      if(inKeys.has(c.d.b.key))continue;
-     if((outCount.get(c.a.key)||0)>=2)continue;
-     if((teamCount.get(c.d.tb)||0)>=2)continue;
-     chosen.push(c);inKeys.add(c.d.b.key);outCount.set(c.a.key,(outCount.get(c.a.key)||0)+1);teamCount.set(c.d.tb,(teamCount.get(c.d.tb)||0)+1);
-     if(chosen.length>=7)break;
+     if((outCount.get(c.a.key)||0)>=1)continue;
+     if((teamCount.get(c.d.tb)||0)>=1)continue;
+     chosen.push(c);inKeys.add(c.d.b.key);outCount.set(c.a.key,1);teamCount.set(c.d.tb,1);
+     if(chosen.length>=4)break;
    }
    const weak=Object.entries(baseStruct.groups).sort((x,y)=>x[1].score-y[1].score)[0];
-   return {results:chosen,weak,baseStruct:baseStruct.score,baseNow,baseStatic,baseFuture,scanned:quick.length};
+   return {results:chosen,weak,baseStruct:baseStruct.score,baseNow:baseNow.score,baseStatic:baseStatic.score,baseFuture:baseFuture.score,scanned:quick.length,exactCount:exact.length};
  }
  function metric(label,val,cls=''){return `<div class="market-metric"><span>${label}</span><b class="${cls}">${val}</b></div>`}
  function signed14(x,d=1){return `${x>=0?'+':''}${x.toFixed(d)}`}
  function renderCard(c,i,hero=false){
    const tg=c.tags.map(([t,clz])=>`<span class="market-tag ${clz}">${t}</span>`).join('');
-   const body=`<div class="market-hero-row"><div><div class="${hero?'market-kicker':''}">${hero?'LA MOSSA CHE FAREI':''}</div><div class="${hero?'market-maintrade':'trade'}">${c.a.p.name} → ${c.d.b.p.name} ${hero?`<small>· ${c.d.tb}</small>`:''}</div>${hero?'':`<div class="team">${c.d.tb} · ${c.d.b.p.role}</div>`}</div><div class="${hero?'market-overall':'score'}">${c.score.toFixed(0)}<${hero?'span':'small'}>MAX GM /100</${hero?'span':'small'}></div></div><div class="market-tagrow">${tg}</div><div class="market-metrics">${metric('XI oggi',signed14(c.xiNowDelta),c.xiNowDelta>0?'good':c.xiNowDelta<0?'bad':'')}${metric('XI futuro',signed14(c.futureXiDelta),c.futureXiDelta>0?'good':'')}${metric('Struttura',signed14(c.structDelta),c.structDelta>0?'good':'')}${metric('Timing',signed14(c.timing),c.timing>0?'gold':'')}${metric('Accetta',c.d.realism.toFixed(0)+'%',c.d.realism>=65?'good':c.d.realism<45?'bad':'warn')}${metric('Interesse',c.d.interest.toFixed(0)+'%',c.d.interest>=70?'good':'')}</div><div class="market-reason">${c.reason}</div><div class="market-card-actions"><button class="action secondary" data-auto-out="${c.a.key}" data-auto-team="${c.d.tb}" data-auto-in="${c.d.b.key}">VALUTA SCAMBIO</button></div>`;
+   const caution=c.caution?`<div class="market-reason" style="color:#e8b967"><b>ATTENZIONE:</b> ${c.caution}.</div>`:'';
+   const body=`<div class="market-hero-row"><div><div class="${hero?'market-kicker':''}">${hero?'LA MOSSA PIÙ SENSATA':''}</div><div class="${hero?'market-maintrade':'trade'}">${c.a.p.name} → ${c.d.b.p.name} ${hero?`<small>· ${c.d.tb}</small>`:''}</div>${hero?'':`<div class="team">${c.d.tb} · ${c.d.b.p.role}</div>`}</div><div class="${hero?'market-overall':'score'}">${c.score.toFixed(0)}<${hero?'span':'small'}>QUALITÀ IDEA /100</${hero?'span':'small'}></div></div><div class="market-tagrow">${tg}</div><div class="market-metrics">${metric('XI oggi',signed14(c.xiNowDelta),c.xiNowDelta>0?'good':c.xiNowDelta<0?'bad':'')}${metric('XI futuro',signed14(c.futureXiDelta),c.futureXiDelta>0?'good':'')}${metric('Struttura',signed14(c.structDelta),c.structDelta>0?'good':'')}${metric('Loro',signed14(c.oppBenefit),c.oppBenefit>=0?'good':'warn')}${metric('Accetta',c.d.realism.toFixed(0)+'%',c.d.realism>=65?'good':c.d.realism<50?'bad':'warn')}${metric('Interesse',c.d.interest.toFixed(0)+'%',c.d.interest>=70?'good':'')}</div><div class="market-reason">${c.reason}</div>${caution}<div class="market-card-actions"><button class="action secondary" data-auto-out="${c.a.key}" data-auto-team="${c.d.tb}" data-auto-in="${c.d.b.key}">VALUTA SCAMBIO</button></div>`;
    return hero?`<div class="market-hero-pick">${body}</div>`:`<div class="market-card">${body}</div>`;
  }
  function renderMarket(){
    const team=$('marketTeam')?.value||DEFAULT_TEAM,out=$('marketOutput'),st=$('marketStatus');if(!out)return;
-   if(st)st.textContent='Sto confrontando la tua rosa con tutte le altre squadre…';out.innerHTML='<div class="smart-empty">Analisi del mercato in corso…</div>';
+   if(st)st.textContent='Cerco solo scambi che migliorano davvero la rosa senza crearne un’altra carenza…';out.innerHTML='<div class="smart-empty">Analisi prudente del mercato in corso…</div>';
    setTimeout(()=>{
      const t0=performance.now(),data=autoMarket(team),ms=performance.now()-t0,rr=data.results;
-     if(!rr.length){out.innerHTML='<div class="smart-empty">Nessuno scambio supera le soglie minime di miglioramento e realismo con i dati attuali. Meglio non forzare il mercato.</div>';if(st)st.textContent=`Analisi completata in ${ms.toFixed(0)} ms · nessuna mossa consigliata.`;return}
+     if(!rr.length){out.innerHTML='<div class="smart-empty"><b>NON FORZEREI SCAMBI.</b><br><br>Con i dati attuali nessuna proposta supera insieme i filtri di XI, futuro, struttura, valore e realismo. Per MAX GM è meglio tenere la rosa che suggerire una trattativa strana.</div>';if(st)st.textContent=`Analisi completata in ${ms.toFixed(0)} ms · nessuna mossa abbastanza solida.`;return}
      const weak=data.weak,avgReal=rr.reduce((s,c)=>s+c.d.realism,0)/rr.length;
-     const summary=`<div class="market-summary"><div class="market-kpi"><span>Punto da rinforzare</span><b>${weak?weak[0]:'—'}</b><div class="tiny muted">${weak?weak[1].score.toFixed(0)+'/100':''}</div></div><div class="market-kpi"><span>Mosse consigliate</span><b>${rr.length}</b><div class="tiny muted">solo opportunità sopra soglia</div></div><div class="market-kpi"><span>Realismo medio</span><b>${avgReal.toFixed(0)}%</b><div class="tiny muted">probabilità controparte</div></div><div class="market-kpi"><span>Analisi</span><b>${data.scanned}</b><div class="tiny muted">finalisti approfonditi</div></div></div>`;
-     out.innerHTML=summary+renderCard(rr[0],0,true)+(rr.length>1?`<div class="market-section-title"><b>ALTRE MOSSE CHE VALUTEREI</b><div>Ordinate per miglioramento complessivo, valore prospettico e possibilità reale di chiudere.</div></div><div class="market-list">${rr.slice(1).map((c,i)=>renderCard(c,i+1,false)).join('')}</div>`:'');
+     const summary=`<div class="market-summary"><div class="market-kpi"><span>Punto da rinforzare</span><b>${weak?weak[0]:'—'}</b><div class="tiny muted">${weak?weak[1].score.toFixed(0)+'/100':''}</div></div><div class="market-kpi"><span>Idee solide</span><b>${rr.length}</b><div class="tiny muted">massimo 4, filtrate</div></div><div class="market-kpi"><span>Realismo medio</span><b>${avgReal.toFixed(0)}%</b><div class="tiny muted">controparte</div></div><div class="market-kpi"><span>Finalisti analizzati</span><b>${data.exactCount}</b><div class="tiny muted">con XI e struttura ricalcolati</div></div></div>`;
+     out.innerHTML=summary+renderCard(rr[0],0,true)+(rr.length>1?`<div class="market-section-title"><b>ALTRE IDEE CHE HANNO SENSO</b><div>Se non superano le soglie, MAX GM preferisce non proporle.</div></div><div class="market-list">${rr.slice(1).map((c,i)=>renderCard(c,i+1,false)).join('')}</div>`:'');
      out.querySelectorAll('[data-auto-out]').forEach(b=>b.onclick=()=>{
        const ka=b.dataset.autoOut,tb=b.dataset.autoTeam,kb=b.dataset.autoIn;
        const tab=[...document.querySelectorAll('.tab')].find(x=>x.dataset.view==='trade');tab?.click();
        setTimeout(()=>{$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=ka;$('tradePlayerB').value=kb;analyzeTrade();document.querySelector('#tradeResult')?.scrollIntoView({behavior:'smooth',block:'start'})},80);
      });
-     if(st)st.textContent=`${DB.meta.name} · ${team} · ${rr.length} proposte · dati attuali + proiezione interna · ${ms.toFixed(0)} ms`;
+     if(st)st.textContent=`${DB.meta.name} · ${team} · ${rr.length} idee solide · ricalcolo reale XI/futuro/struttura · ${ms.toFixed(0)} ms`;
    },30);
  }
- function populate(){const sel=$('marketTeam');if(!sel)return;const preferred=$('homeTeam')?.value||$(`matchTeam`)?.value||DEFAULT_TEAM,prev=sel.value;sel.innerHTML=TEAM_NAMES.map(t=>`<option value="${t}">${t}</option>`).join('');sel.value=TEAM_NAMES.includes(prev)?prev:(TEAM_NAMES.includes(preferred)?preferred:DEFAULT_TEAM)}
- function brand(){const v=document.querySelector('.version');if(v)v.textContent='V1.4.1 · CONSIGLI';document.title='MAX GM V1.4.1 — Consigli automatici';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.4.1 · ${DB?.meta?.name||''} · Formazione · Scambi · Consigli automatici · Dati · Analisi lega · PWA`}
- function install(){
-   populate();brand();$('marketTeam')?.addEventListener('change',renderMarket);$('marketRefresh')?.addEventListener('click',renderMarket);
-   const tab=[...document.querySelectorAll('.tab')].find(x=>x.dataset.view==='market');tab?.addEventListener('click',()=>{populate();setTimeout(renderMarket,50)});
-   $('globalLeague')?.addEventListener('change',()=>setTimeout(()=>{populate();brand();renderMarket()},180));
-   $('homeTeam')?.addEventListener('change',()=>{if($('marketTeam'))$('marketTeam').value=$('homeTeam').value});
-   setTimeout(()=>{populate();},200);
+ function populate(){const sel=$('marketTeam');if(!sel)return;const preferred=$('homeTeam')?.value||$('matchTeam')?.value||DEFAULT_TEAM,prev=sel.value;sel.innerHTML=TEAM_NAMES.map(t=>`<option value="${t}">${t}</option>`).join('');sel.value=TEAM_NAMES.includes(prev)?prev:(TEAM_NAMES.includes(preferred)?preferred:DEFAULT_TEAM)}
+ function brand(){const v=document.querySelector('.version');if(v)v.textContent='V1.4.3 · IDEE FIX';document.title='MAX GM V1.4.3 — Idee automatiche';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.4.3 · ${DB?.meta?.name||''} · Formazione · Scambi · Idee automatiche · Dati · Analisi lega · PWA`}
+ const oldSwitch=window.switchLeague;window.switchLeague=function(k){oldSwitch(k);setTimeout(()=>{populate();brand();renderMarket()},60)};
+ document.addEventListener('click',e=>{if(e.target.closest('[data-view="market"]'))setTimeout(()=>{populate();brand();renderMarket()},60)});
+ const btn=$('marketRefresh');if(btn)btn.onclick=renderMarket;
+ const teamSel=$('marketTeam');if(teamSel)teamSel.onchange=renderMarket;
+ populate();brand();
+ // Avvio automatico: entrando nella pagina IDEE l'utente non deve premere nulla.
+ if(document.getElementById('market')?.classList.contains('active'))setTimeout(renderMarket,80);
+ window.MAXGM_V143={version:'V1.4.3',autoMarket,futureProjection,renderMarket};
+})();
+</script>
+
+
+<style id="maxgm-v15-multitrade-css">
+.v15-format-control{min-width:170px}.v15-format-control select{width:100%}
+.v15-multi-card{margin-bottom:12px;border-color:#405b72;background:linear-gradient(145deg,#0b2032,#071522)}
+.v15-multi-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.v15-multi-head h2{margin:0 0 4px;font-size:18px}.v15-multi-head .tag{border:1px solid #806b2e;color:#f1c75b;border-radius:999px;padding:5px 9px;font-size:9px;font-weight:950;white-space:nowrap}
+.v15-multi-grid{display:grid;grid-template-columns:1fr 150px 1fr;gap:10px;margin-top:12px;align-items:start}.v15-side{display:grid;gap:7px}.v15-side-title{font-size:9px;font-weight:950;color:#91a7b8;text-transform:uppercase;letter-spacing:.08em}.v15-player-slot.hidden{display:none}
+.v15-arrow{display:flex;align-items:center;justify-content:center;height:100%;font-size:25px;color:#f1c75b;font-weight:950;padding-top:26px}
+.v15-multi-actions{display:flex;justify-content:flex-end;margin-top:10px;gap:8px;flex-wrap:wrap}
+.v15-multi-result{margin-top:10px}.v15-verdict{border-radius:12px;padding:12px;border:1px solid #294864;background:#081725}.v15-verdict.good{border-color:#2f7059}.v15-verdict.warn{border-color:#765b28}.v15-verdict.bad{border-color:#713c3c}.v15-verdict .big{font-size:25px;font-weight:1000;line-height:1.05}.v15-trade-line{font-size:16px;font-weight:950;line-height:1.25;margin:5px 0}.v15-trade-line .vs{color:#f1c75b;padding:0 5px}.v15-format-badge{display:inline-flex;border:1px solid #806b2e;color:#f1c75b;border-radius:999px;padding:3px 6px;font-size:8px;font-weight:950;margin-right:5px}
+.v15-market-format{display:grid;grid-template-columns:minmax(180px,1fr) minmax(150px,.55fr) auto;gap:10px;align-items:end;margin-top:14px}.v15-market-format .market-controls{display:contents}
+.v15-multi-names{font-size:19px;font-weight:1000;line-height:1.2}.v15-multi-names small{font-size:10px;color:#91a7b8;font-weight:700}.v15-auto-card .market-maintrade,.v15-auto-card .trade{line-height:1.24}
+.v15-complexity{font-size:8px;color:#9bb0c1;margin-top:3px}
+@media(max-width:760px){
+ .v15-multi-head{align-items:center}.v15-multi-grid{grid-template-columns:1fr;gap:7px}.v15-arrow{height:auto;padding:0;transform:rotate(90deg);font-size:19px}.v15-multi-actions .action{width:100%}.v15-market-format{grid-template-columns:1fr}.v15-multi-names{font-size:16px}.v15-format-control{min-width:0}
+}
+</style>
+<script id="maxgm-v15-multitrade-js">
+(function(){
+ 'use strict';
+ const V15='V1.5.3';
+ const $=id=>document.getElementById(id);
+ const clamp15=(x,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(+x)?+x:a));
+ const avg15=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:0;
+ const sum15=a=>a.reduce((s,x)=>s+(Number.isFinite(+x)?+x:0),0);
+ function unique15(a){return [...new Set(a)]}
+ function comb15(arr,n){const out=[];function rec(start,p){if(p.length===n){out.push(p.slice());return}for(let i=start;i<=arr.length-(n-p.length);i++){p.push(arr[i]);rec(i+1,p);p.pop()}}rec(0,[]);return out}
+ function recByKey(team,key){return roster(team).find(r=>r.key===key)||null}
+ function status15(team,rec){try{return String(getMatchInput(team,rec.key)?.status||'ok').toLowerCase()}catch(e){return 'ok'}}
+ function perceived15(team,rec){try{return window.MAXGM_V13.perceivedMarketValue(team,rec)}catch(e){return baseRating(rec.p)}}
+ function expend15(team,rec){try{return window.MAXGM_V13.playerExpendability(team,rec)}catch(e){return 8}}
+ function future15(p){try{return window.MAXGM_V143.futureProjection(p)}catch(e){return baseRating(p)}}
+ function conf15(team,rec){try{const c=matchComponents(rec.p,rec,team);return Number.isFinite(+c.confidence)?+c.confidence:55}catch(e){return 55}}
+ function need15(arr,p){try{return needForPlayer(arr,p)}catch(e){return {group:'—',health:100,need:0}}}
+ function swap15(arr,outRecs,inRecs){const os=new Set(outRecs.map(r=>r.key));const base=arr.filter(r=>!os.has(r.key));const seen=new Set(base.map(r=>r.key));for(const r of inRecs){if(!seen.has(r.key)){base.push({key:r.key,price:r.price,p:r.p});seen.add(r.key)}}return base}
+ function lineup15(team,arr,incomingOwner){
+   const avail=arr.filter(r=>status15(incomingOwner.get(r.key)||team,r)!=='out');
+   try{const z=bestLineup(avail,(p,r)=>matchScore(p,r,incomingOwner.get(r.key)||team)),b=z?.best||null;if(!b)return {score:0,module:'—',keys:new Set()};return {score:b.score,module:b.module,keys:new Set([b.keeper.key,...b.picks.map(x=>x[1].key)])}}catch(e){return {score:0,module:'—',keys:new Set()}}
  }
- async function selfTest(){
-   if(!new URLSearchParams(location.search).has('v14test'))return;const wait=ms=>new Promise(r=>setTimeout(r,ms)),R={tests:[],leagues:{},samples:{}};
-   try{
-     for(const league of ['park','urbe']){switchLeague(league);await wait(150);const team=DEFAULT_TEAM,d=autoMarket(team);R.leagues[league]={team,n:d.results.length,weak:d.weak?.[0],scores:d.results.map(x=>+x.score.toFixed(1))};R.tests.push({name:`${league}_has_suggestions`,pass:d.results.length>=3});R.tests.push({name:`${league}_finite`,pass:d.results.every(x=>[x.score,x.xiNowDelta,x.futureXiDelta,x.structDelta,x.timing,x.d.realism].every(Number.isFinite))});R.tests.push({name:`${league}_no_self`,pass:d.results.every(x=>x.d.tb!==team)});}
-     switchLeague('park');await wait(120);const d=autoMarket('Aston Birra');R.samples.dark=d.results.slice(0,5).map(x=>({out:x.a.p.name,in:x.d.b.p.name,team:x.d.tb,score:+x.score.toFixed(1),xi:+x.xiNowDelta.toFixed(1),future:+x.futureXiDelta.toFixed(1),real:+x.d.realism.toFixed(0)}));R.ok=R.tests.every(x=>x.pass);
-   }catch(e){R.ok=false;R.error=String(e?.stack||e)}
-   const pre=document.createElement('pre');pre.id='v14testResult';pre.style='white-space:pre-wrap;color:white;background:black;padding:12px;position:relative;z-index:99999';pre.textContent=JSON.stringify(R,null,2);document.body.appendChild(pre);document.title='V14TEST '+(R.ok?'OK':'FAIL');
+ function static15(arr){try{const z=bestLineup(arr),b=z?.best||null;return b?{score:b.score,module:b.module,keys:new Set([b.keeper.key,...b.picks.map(x=>x[1].key)])}:{score:0,module:'—',keys:new Set()}}catch(e){return {score:0,module:'—',keys:new Set()}}}
+ function futureLineup15(arr){try{const z=bestLineup(arr,p=>future15(p)),b=z?.best||null;return b?{score:b.score,module:b.module,keys:new Set([b.keeper.key,...b.picks.map(x=>x[1].key)])}:{score:0,module:'—',keys:new Set()}}catch(e){return {score:0,module:'—',keys:new Set()}}}
+ function groupDiff15(before,after){let worst=0,best=0,critical=false;const deltas={};for(const g of Object.keys(before.groups||{})){const d=(after.groups[g]?.score||0)-(before.groups[g]?.score||0);deltas[g]=d;worst=Math.min(worst,d);best=Math.max(best,d);const aft=after.groups[g]?.score||0,bef=before.groups[g]?.score||0;if((d<=-5.5&&aft<62)||(bef>=68&&aft<58))critical=true}return {deltas,worst,best,critical}}
+ function gkCount15(recs){return recs.filter(r=>roles(r.p).has('P')).length}
+ function safeSigned15(x,d=1){x=Number.isFinite(+x)?+x:0;return `${x>=0?'+':''}${x.toFixed(d)}`}
+ const baseCache15=new Map();
+ function clearBaseCache15(){baseCache15.clear()}
+ function baseSnapshot15(team){const k=`${typeof activeLeague!=='undefined'?activeLeague:'x'}:${team}`;if(baseCache15.has(k))return baseCache15.get(k);const R=roster(team),v={roster:R,structure:structure(R),now:lineup15(team,R,new Map()),future:futureLineup15(R)};baseCache15.set(k,v);return v}
+ function evaluateMulti15(ta,tb,outKeys,inKeys){
+   if(!ta||!tb||ta===tb)return {valid:false,error:'Seleziona due squadre diverse.'};
+   const n=outKeys.length;if(n<1||n>3||inKeys.length!==n)return {valid:false,error:'Lo scambio deve essere 1vs1, 2vs2 o 3vs3.'};
+   if(unique15(outKeys).length!==n||unique15(inKeys).length!==n)return {valid:false,error:'Non puoi selezionare due volte lo stesso giocatore.'};
+   const snapA=baseSnapshot15(ta),snapB=baseSnapshot15(tb),A=snapA.roster,B=snapB.roster,outs=outKeys.map(k=>A.find(r=>r.key===k)).filter(Boolean),ins=inKeys.map(k=>B.find(r=>r.key===k)).filter(Boolean);
+   if(outs.length!==n||ins.length!==n)return {valid:false,error:'Uno o più giocatori non appartengono alla squadra selezionata.'};
+   const A2=swap15(A,outs,ins),B2=swap15(B,ins,outs);
+   if(A2.length!==A.length||B2.length!==B.length)return {valid:false,error:'Errore nella composizione delle rose dopo lo scambio.'};
+   if(new Set(A2.map(r=>r.key)).size!==A2.length||new Set(B2.map(r=>r.key)).size!==B2.length)return {valid:false,error:'Lo scambio genererebbe un duplicato in rosa.'};
+   const ownerA=new Map(ins.map(r=>[r.key,tb])),ownerB=new Map(outs.map(r=>[r.key,ta]));
+   const sA0=snapA.structure,sA1=structure(A2),sB0=snapB.structure,sB1=structure(B2);
+   const nowA0=snapA.now,nowA1=lineup15(ta,A2,ownerA),nowB0=snapB.now,nowB1=lineup15(tb,B2,ownerB);
+   const futA0=snapA.future,futA1=futureLineup15(A2),futB0=snapB.future,futB1=futureLineup15(B2);
+   const legalA=futA1.score>0,legalB=futB1.score>0;
+   const xiNow=nowA1.score-nowA0.score,futureXi=futA1.score-futA0.score,staticXi=0,struct=sA1.score-sA0.score;
+   const oppNow=nowB1.score-nowB0.score,oppFuture=futB1.score-futB0.score,oppStruct=sB1.score-sB0.score;
+   const roleDiff=groupDiff15(sA0,sA1),oppRoleDiff=groupDiff15(sB0,sB1);
+   const playerDelta=sum15(ins.map(r=>baseRating(r.p)))-sum15(outs.map(r=>baseRating(r.p)));
+   const mOut=sum15(outs.map(r=>perceived15(ta,r))),mIn=sum15(ins.map(r=>perceived15(tb,r)));
+   const marketAvg=Math.max(1,(mOut+mIn)/2),marketParity=clamp15(100-Math.abs(mIn-mOut)/marketAvg*145);
+   const cOut=sum15(outs.map(r=>+r.price||0)),cIn=sum15(ins.map(r=>+r.price||0)),costAvg=Math.max(1,(cOut+cIn)/2),costParity=clamp15(100-Math.abs(cIn-cOut)/costAvg*105);
+   const oppNeed=avg15(outs.map(r=>need15(B,r.p).need)),ourNeed=avg15(ins.map(r=>need15(A,r.p).need));
+   const exp=avg15(ins.map(r=>expend15(tb,r))),dataConf=avg15([...outs.map(r=>conf15(ta,r)),...ins.map(r=>conf15(tb,r))]);
+   const weeklyOut=sum15(outs.map(r=>{try{return tradeWeeklyPulse(ta,r)}catch(e){return 0}})),weeklyIn=sum15(ins.map(r=>{try{return tradeWeeklyPulse(tb,r)}catch(e){return 0}})),weeklyDelta=weeklyIn-weeklyOut;
+   const oppBenefitRaw=oppNow*.45+oppFuture*.30+oppStruct*.25,oppBenefitN=clamp15(50+oppBenefitRaw*5.2);
+   const xiN=clamp15(50+xiNow*5.2),futureN=clamp15(50+futureXi*4.3),structN=clamp15(50+struct*9),playerN=clamp15(50+playerDelta*2.2),marketGainN=clamp15(50+(mIn-mOut)*1.8),weeklyN=clamp15(50+weeklyDelta*4);
+   const ourScore=clamp15(xiN*.28+futureN*.22+structN*.14+playerN*.09+marketGainN*.11+clamp15(50+ourNeed*2)*.08+weeklyN*.08);
+   const interest=clamp15(38+oppNeed*1.5+Math.max(0,72-sB0.score)*.22);
+   let realism=clamp15(oppBenefitN*.28+interest*.22+clamp15(50+exp*1.3)*.12+marketParity*.18+costParity*.12+clamp15(100-Math.abs(playerDelta)*2.2)*.08);
+   realism=clamp15(realism-(n-1)*3.0);
+   const complexityPenalty=(n-1)*2.5;
+   let score=clamp15(ourScore*.50+realism*.24+oppBenefitN*.10+marketParity*.08+dataConf*.05+costParity*.03-complexityPenalty);
+   const bestGain=Object.entries(roleDiff.deltas).sort((a,b)=>b[1]-a[1])[0]||['—',0];
+   const gkBalanced=gkCount15(outs)===gkCount15(ins);
+   const minReal=n===1?48:n===2?50:53, minOur=n===1?55:n===2?57:59, minParity=n===1?35:n===2?43:48;
+   const meaningful=(xiNow>(n===3?.35:.45)||futureXi>(n===3?.55:.65)||struct>.20||bestGain[1]>(n===3?3.0:3.5));
+   const validAuto=legalA&&legalB&&gkBalanced&&!roleDiff.critical&&!oppRoleDiff.critical&&xiNow>=-.90&&futureXi>=-.85&&struct>=-.50&&oppBenefitRaw>=-.85&&realism>=minReal&&ourScore>=minOur&&marketParity>=minParity&&costParity>=30&&meaningful;
+   let verdict='RIFIUTA',vclass='bad';
+   if(!legalA||!legalB||!gkBalanced){verdict='NON VALIDO';vclass='bad'}
+   else if(ourScore>=66&&!roleDiff.critical){verdict=realism>=48?'ACCETTA':'BUONO MA DIFFICILE';vclass=realism>=48?'good':'warn'}
+   else if(ourScore>=54&&!roleDiff.critical){verdict='TRATTA';vclass='warn'}
+   if(!gkBalanced){score=Math.max(0,score-18);realism=Math.max(0,realism-20)}
+   return {valid:true,n,ta,tb,outs,ins,A2,B2,xiNowDelta:xiNow,futureXiDelta:futureXi,staticXiDelta:staticXi,structDelta:struct,oppNowDelta:oppNow,oppFutureDelta:oppFuture,oppStructDelta:oppStruct,oppBenefit:oppBenefitRaw,oppBenefitN,playerDelta,marketOut:mOut,marketIn:mIn,marketParity,costOut:cOut,costIn:cIn,costParity,oppNeed,ourNeed,exp,dataConf,weeklyDelta,ourScore,realism,interest,score,roleDiff,oppRoleDiff,bestGainGroup:bestGain[0],bestGainValue:bestGain[1],validAuto,gkBalanced,legalA,legalB,verdict,vclass,moduleBefore:nowA0.module,moduleAfter:nowA1.module,oppModuleBefore:nowB0.module,oppModuleAfter:nowB1.module};
  }
- if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{install();setTimeout(selfTest,900)});else{install();setTimeout(selfTest,900)}
- window.MAXGM_V14={version:VERSION,autoMarket,futureProjection,renderMarket};
+ function roleGroups15(p){const rr=roles(p),out=[];for(const [g,gd] of Object.entries(GROUPS))if([...rr].some(r=>gd.roles.includes(r)))out.push(g);return out}
+ function fastPlayer15(owner,other,rec,isOutgoing,ownerArr,otherArr){
+   const ownNeed=need15(ownerArr,rec.p).need,otherNeed=need15(otherArr,rec.p).need,exp=expend15(owner,rec),gm=baseRating(rec.p),pv=perceived15(owner,rec),cost=+rec.price||0;
+   // Pre-filtro volutamente leggero: evita di ricalcolare interi XI per tutte le 9 squadre. Il controllo esatto arriva solo sui finalisti.
+   const core=clamp15((gm-68)*.55-exp*.18,0,16);
+   const st=status15(owner,rec);let score;
+   if(isOutgoing) score=exp*1.48+otherNeed*1.28-ownNeed*1.18-core+(100-gm)*.05+(st==='out'?-5:0);
+   else score=otherNeed*1.38+gm*.30+exp*.74-ownNeed*.82-core*.30+(st==='out'?-8:0);
+   return {rec,ownNeed,otherNeed,exp,gm,pv,cost,core,score,groups:roleGroups15(rec.p)};
+ }
+ function packageFast15(ta,tb,outInfos,inInfos){
+   const mOut=sum15(outInfos.map(x=>x.pv)),mIn=sum15(inInfos.map(x=>x.pv)),marketAvg=Math.max(1,(mOut+mIn)/2),marketParity=clamp15(100-Math.abs(mIn-mOut)/marketAvg*138);
+   const cOut=sum15(outInfos.map(x=>x.cost)),cIn=sum15(inInfos.map(x=>x.cost)),costAvg=Math.max(1,(cOut+cIn)/2),costParity=clamp15(100-Math.abs(cIn-cOut)/costAvg*95);
+   const baseOut=sum15(outInfos.map(x=>x.gm)),baseIn=sum15(inInfos.map(x=>x.gm)),valueDelta=baseIn-baseOut;
+   const ourGain=avg15(inInfos.map(x=>x.otherNeed))-avg15(outInfos.map(x=>x.ownNeed));
+   const oppGain=avg15(outInfos.map(x=>x.otherNeed))-avg15(inInfos.map(x=>x.ownNeed));
+   const cedibility=avg15(inInfos.map(x=>x.exp)),ourCore=avg15(outInfos.map(x=>x.core)),theirCore=avg15(inInfos.map(x=>x.core));
+   const n=outInfos.length,ourFast=clamp15(52+valueDelta*1.15+(mIn-mOut)*.80+ourGain*.72-ourCore*.24),oppFast=clamp15(52-valueDelta*.92+(mOut-mIn)*.60+oppGain*.78+cedibility*.36-theirCore*.18);
+   const realism=clamp15(oppFast*.42+marketParity*.26+costParity*.16+clamp15(50+cedibility*1.1)*.16-(n-1)*2.5);
+   const score=clamp15(ourFast*.52+realism*.30+marketParity*.10+costParity*.08-(n-1)*1.5);
+   return {score,ourFast,oppFast,realism,marketParity,costParity,valueDelta,ourGain,oppGain};
+ }
+ function buildPackageCandidates15(ta,tb,n){
+   const A=roster(ta),B=roster(tb);
+   const outPool=A.map(r=>fastPlayer15(ta,tb,r,true,A,B)).sort((a,b)=>b.score-a.score).slice(0,n===2?8:7);
+   const inPool=B.map(r=>fastPlayer15(tb,ta,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,n===2?10:9);
+   const oc=comb15(outPool,n),ic=comb15(inPool,n),cand=[];
+   for(const os of oc){for(const ins of ic){
+     if(gkCount15(os.map(x=>x.rec))!==gkCount15(ins.map(x=>x.rec)))continue;
+     const q=packageFast15(ta,tb,os,ins);
+     if(q.marketParity<(n===2?30:34)||q.costParity<18||q.ourFast<47||q.realism<38)continue;
+     cand.push({tb,outs:os.map(x=>x.rec),ins:ins.map(x=>x.rec),fast:q.score,q});
+   }}
+   cand.sort((a,b)=>b.fast-a.fast);return cand.slice(0,n===2?6:4);
+ }
+ function suggestMulti15(team,n,limit=3){
+   const fastAll=[];
+   for(const tb of TEAM_NAMES){if(tb===team)continue;for(const c of buildPackageCandidates15(team,tb,n))fastAll.push(c)}
+   fastAll.sort((a,b)=>b.fast-a.fast);
+   const exact=[],seen=new Set(),maxExact=n===2?5:3;
+   for(const x of fastAll){
+     const sig=x.tb+'|'+x.outs.map(r=>r.key).sort().join(',')+'|'+x.ins.map(r=>r.key).sort().join(',');if(seen.has(sig))continue;seen.add(sig);
+     const ev=evaluateMulti15(team,x.tb,x.outs.map(r=>r.key),x.ins.map(r=>r.key));
+     if(ev.valid&&ev.validAuto)exact.push(ev);
+     if(seen.size>=maxExact)break;
+   }
+   exact.sort((a,b)=>b.score-a.score);
+   const chosen=[],teams=new Set();for(const c of exact){if(teams.has(c.tb))continue;chosen.push(c);teams.add(c.tb);if(chosen.length>=limit)break}
+   return chosen;
+ }
+ function suggestSingle15(team,limit=4){
+   const fastAll=[],A=roster(team);
+   for(const tb of TEAM_NAMES){
+     if(tb===team)continue;const B=roster(tb);
+     const outs=A.map(r=>fastPlayer15(team,tb,r,true,A,B)).sort((a,b)=>b.score-a.score).slice(0,7);
+     const ins=B.map(r=>fastPlayer15(tb,team,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,9);
+     for(const o of outs)for(const i of ins){
+       if(gkCount15([o.rec])!==gkCount15([i.rec]))continue;const q=packageFast15(team,tb,[o],[i]);
+       if(q.marketParity<28||q.costParity<18||q.ourFast<46||q.realism<38)continue;fastAll.push({tb,outs:[o.rec],ins:[i.rec],fast:q.score,q});
+     }
+   }
+   fastAll.sort((a,b)=>b.fast-a.fast);const exact=[],seen=new Set();
+   for(const x of fastAll){const sig=x.tb+'|'+x.outs[0].key+'|'+x.ins[0].key;if(seen.has(sig))continue;seen.add(sig);const ev=evaluateMulti15(team,x.tb,[x.outs[0].key],[x.ins[0].key]);if(ev.valid&&ev.validAuto)exact.push(ev);if(seen.size>=5)break}
+   exact.sort((a,b)=>b.score-a.score);const chosen=[],teams=new Set(),outs=new Set();for(const c of exact){if(teams.has(c.tb)||outs.has(c.outs[0].key))continue;chosen.push(c);teams.add(c.tb);outs.add(c.outs[0].key);if(chosen.length>=limit)break}return chosen;
+ }
+ function normalizeSingle15(c){return {n:1,ta:c.d.ta||'',tb:c.d.tb,outs:[c.a],ins:[c.d.b],score:c.score,xiNowDelta:c.xiNowDelta,futureXiDelta:c.futureXiDelta,structDelta:c.structDelta,oppBenefit:c.oppBenefit,realism:c.d.realism,interest:c.d.interest,ourScore:c.d.forUs||c.score,marketParity:100-Math.min(100,Math.abs(c.marketGap||0)*4),reason:c.reason||'',validAuto:true,verdict:'',vclass:'',bestGainGroup:c.bestGainGroup||'—'} }
+ function reason15(c){const bits=[];if(c.xiNowDelta>1.0)bits.push(`migliora l'XI di oggi (${safeSigned15(c.xiNowDelta)})`);if(c.futureXiDelta>1.1)bits.push(`alza l'XI futuro (${safeSigned15(c.futureXiDelta)})`);if(c.structDelta>.35)bits.push(`migliora la struttura (${safeSigned15(c.structDelta)})`);if(c.bestGainValue>4)bits.push(`copre una carenza in ${c.bestGainGroup}`);if(c.realism>=65)bits.push('ha una buona probabilità di essere trattabile');if(c.n>=2)bits.push(`${c.n} contropartite permettono di riequilibrare valore e ruoli`);return (bits.length?bits.slice(0,3):['supera i filtri di valore, XI, struttura e realismo']).join(' · ')+'.'}
+ function multiCard15(c,hero=false){
+   const outNames=c.outs.map(r=>r.p.name).join(' + '),inNames=c.ins.map(r=>r.p.name).join(' + '),fmt=`${c.n} VS ${c.n}`;
+   const trade=`<span class="v15-format-badge">${fmt}</span>${outNames} <span style="color:#f1c75b">→</span> ${inNames}`;
+   const metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;
+   const body=`<div class="market-hero-row"><div><div class="${hero?'market-kicker':''}">${hero?'LA MOSSA PIÙ SENSATA':''}</div><div class="${hero?'market-maintrade':'trade'}">${trade}${hero?` <small>· ${c.tb}</small>`:''}</div>${hero?'':`<div class="team">${c.tb} · ${fmt}</div>`}<div class="v15-complexity">Valutazione con XI attuale, XI futuro, struttura e realismo della controparte.</div></div><div class="${hero?'market-overall':'score'}">${c.score.toFixed(0)}<${hero?'span':'small'}>QUALITÀ IDEA /100</${hero?'span':'small'}></div></div><div class="market-tagrow"><span class="market-tag gold">${fmt}</span>${c.realism>=65?'<span class="market-tag good">REALISTICO</span>':''}${c.xiNowDelta>1?'<span class="market-tag good">XI SUBITO</span>':''}${c.futureXiDelta>1.1?'<span class="market-tag gold">FUTURO</span>':''}</div><div class="market-metrics">${metric('XI oggi',safeSigned15(c.xiNowDelta),c.xiNowDelta>0?'good':'')}${metric('XI futuro',safeSigned15(c.futureXiDelta),c.futureXiDelta>0?'good':'')}${metric('Struttura',safeSigned15(c.structDelta),c.structDelta>0?'good':'')}${metric('Loro',safeSigned15(c.oppBenefit),c.oppBenefit>=0?'good':'warn')}${metric('Accetta',c.realism.toFixed(0)+'%',c.realism>=65?'good':c.realism<50?'bad':'warn')}${metric('Parità',c.marketParity.toFixed(0)+'%',c.marketParity>=70?'good':'')}</div><div class="market-reason">${c.n===1?(c.reason||reason15(c)):reason15(c)}</div><div class="market-card-actions"><button class="action secondary" data-v15-team="${c.tb}" data-v15-n="${c.n}" data-v15-out="${c.outs.map(r=>r.key).join(',')}" data-v15-in="${c.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div>`;
+   return hero?`<div class="market-hero-pick v15-auto-card">${body}</div>`:`<div class="market-card v15-auto-card">${body}</div>`;
+ }
+ function installMarketControl15(){
+   const old=document.querySelector('#market .market-controls');if(!old||$('marketFormat'))return;
+   const parent=old.parentElement;const wrap=document.createElement('div');wrap.className='v15-market-format';
+   const teamControl=old.querySelector('.control');if(teamControl)wrap.appendChild(teamControl);
+   const fmt=document.createElement('div');fmt.className='control v15-format-control';fmt.innerHTML='<label>Formato idee</label><select id="marketFormat"><option value="all">TUTTI · 1vs1 + 2vs2 + 3vs3</option><option value="1">SOLO 1vs1</option><option value="2">SOLO 2vs2</option><option value="3">SOLO 3vs3</option></select>';wrap.appendChild(fmt);
+   const btn=$('marketRefresh');if(btn)wrap.appendChild(btn);old.replaceWith(wrap);
+ }
+ function renderMarket15(){
+   clearBaseCache15();
+   const team=$('marketTeam')?.value||DEFAULT_TEAM,out=$('marketOutput'),st=$('marketStatus'),format=$('marketFormat')?.value||'all';if(!out)return;
+   if(st)st.textContent='Analizzo scambi semplici e multipli senza forzare combinazioni strane…';out.innerHTML='<div class="smart-empty">Analisi mercato 1vs1 / 2vs2 / 3vs3 in corso…</div>';
+   setTimeout(()=>{const t0=performance.now();let results=[],exactCount=0;
+     if(format==='all'||format==='1'){const m1=suggestSingle15(team,4);results.push(...m1);exactCount+=m1.length}
+     if(format==='all'||format==='2'){const m2=suggestMulti15(team,2,3);results.push(...m2);exactCount+=m2.length}
+     if(format==='all'||format==='3'){const m3=suggestMulti15(team,3,2);results.push(...m3);exactCount+=m3.length}
+     results=results.filter(c=>c&&c.validAuto!==false).sort((a,b)=>b.score-a.score);
+     // In modalità TUTTI una multipla deve giustificare la complessità: niente 3vs3 decorativi o 2vs2 peggiori di un 1vs1 equivalente.
+     if(format==='all'){
+       const b1=results.find(c=>c.n===1),b2=results.find(c=>c.n===2);
+       results=results.filter(c=>{if(c.n===2&&b1)return c.score>=b1.score-2.5||c.futureXiDelta>b1.futureXiDelta+1.2||c.structDelta>b1.structDelta+.45;if(c.n===3){const b=b2||b1;if(!b)return true;return c.score>=b.score+1.0||c.futureXiDelta>b.futureXiDelta+1.6||c.structDelta>b.structDelta+.60||c.xiNowDelta>b.xiNowDelta+1.2}return true});
+     }
+     const picked=[],seenTeamFmt=new Set();for(const c of results){const sig=`${c.tb}:${c.n}`;if(seenTeamFmt.has(sig)&&picked.length>=3)continue;picked.push(c);seenTeamFmt.add(sig);if(picked.length>=6)break}
+     const ms=performance.now()-t0;if(!picked.length){out.innerHTML='<div class="smart-empty"><b>NON FORZEREI SCAMBI.</b><br><br>Nessun 1vs1, 2vs2 o 3vs3 supera i filtri di miglioramento e realismo. È un risultato valido: meglio nessuna proposta che una multipla artificiale.</div>';if(st)st.textContent=`Analisi completata in ${ms.toFixed(0)} ms · nessuna proposta abbastanza solida.`;return}
+     const avgReal=avg15(picked.map(c=>c.realism)),fmtCount={1:0,2:0,3:0};picked.forEach(c=>fmtCount[c.n]++);
+     const summary=`<div class="market-summary"><div class="market-kpi"><span>Idee solide</span><b>${picked.length}</b><div class="tiny muted">filtrate</div></div><div class="market-kpi"><span>Formati</span><b>${fmtCount[1]}/${fmtCount[2]}/${fmtCount[3]}</b><div class="tiny muted">1v1 · 2v2 · 3v3</div></div><div class="market-kpi"><span>Realismo medio</span><b>${avgReal.toFixed(0)}%</b><div class="tiny muted">controparte</div></div><div class="market-kpi"><span>Analisi</span><b>${exactCount}</b><div class="tiny muted">finalisti esatti</div></div></div>`;
+     out.innerHTML=summary+multiCard15(picked[0],true)+(picked.length>1?`<div class="market-section-title"><b>ALTRE IDEE CHE HANNO SENSO</b><div>Le multiple ricevono una penalità di complessità: devono essere davvero migliori per comparire.</div></div><div class="market-list">${picked.slice(1).map(c=>multiCard15(c,false)).join('')}</div>`:'');
+     wireAutoButtons15(out,team);if(st)st.textContent=`${DB.meta.name} · ${team} · ${picked.length} idee · inclusi 2vs2/3vs3 · ${ms.toFixed(0)} ms`;
+   },40);
+ }
+ function wireAutoButtons15(root,myTeam){root.querySelectorAll('[data-v15-team]').forEach(b=>b.onclick=()=>{const tb=b.dataset.v15Team,n=+b.dataset.v15N,outs=b.dataset.v15Out.split(','),ins=b.dataset.v15In.split(',');const tab=[...document.querySelectorAll('.tab')].find(x=>x.dataset.view==='trade');tab?.click();setTimeout(()=>{if(n===1){$('tradeTeamA').value=myTeam;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=outs[0];$('tradePlayerB').value=ins[0];analyzeTrade();$('tradeResult')?.scrollIntoView({behavior:'smooth',block:'start'})}else{setMultiForm15(myTeam,tb,n,outs,ins);evaluateMultiForm15();$('v15MultiResult')?.scrollIntoView({behavior:'smooth',block:'start'})}},120)})}
+ function optionPlayers15(sel,team,selected){const arr=roster(team).slice().sort((a,b)=>baseRating(b.p)-baseRating(a.p));sel.innerHTML=arr.map(r=>`<option value="${r.key}" ${r.key===selected?'selected':''}>${r.p.name} · ${r.p.role} · GM ${baseRating(r.p).toFixed(0)}</option>`).join('')}
+ function createMultiTradeUI15(){
+   const sec=$('trade');if(!sec||$('v15MultiCard'))return;const card=document.createElement('div');card.id='v15MultiCard';card.className='card v15-multi-card';card.innerHTML=`<div class="v15-multi-head"><div><h2>Valuta scambio multiplo</h2><div class="muted tiny">Confronta 2vs2 o 3vs3. MAX GM ricalcola XI, futuro, struttura e probabilità che l'altra squadra accetti.</div></div><span class="tag">V1.5.3 · MULTI</span></div><div class="controls" style="margin-top:12px"><div class="control"><label>La mia squadra</label><select id="v15TeamA"></select></div><div class="control"><label>Formato</label><select id="v15Size"><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div><div class="control"><label>Altra squadra</label><select id="v15TeamB"></select></div></div><div class="v15-multi-grid"><div class="v15-side"><div class="v15-side-title">IO CEDO</div><div class="v15-player-slot"><select id="v15Out1"></select></div><div class="v15-player-slot"><select id="v15Out2"></select></div><div class="v15-player-slot" id="v15OutSlot3"><select id="v15Out3"></select></div></div><div class="v15-arrow">⇄</div><div class="v15-side"><div class="v15-side-title">IO RICEVO</div><div class="v15-player-slot"><select id="v15In1"></select></div><div class="v15-player-slot"><select id="v15In2"></select></div><div class="v15-player-slot" id="v15InSlot3"><select id="v15In3"></select></div></div></div><div class="v15-multi-actions"><button class="action" id="v15Evaluate">VALUTA 2 VS 2</button></div><div id="v15MultiResult" class="v15-multi-result"></div>`;
+   const specific=[...sec.children].find(x=>x.querySelector?.('#analyzeTrade'));if(specific)sec.insertBefore(card,specific);else sec.appendChild(card);
+   const ta=$('v15TeamA'),tb=$('v15TeamB');ta.innerHTML=TEAM_NAMES.map(t=>`<option>${t}</option>`).join('');tb.innerHTML=TEAM_NAMES.map(t=>`<option>${t}</option>`).join('');ta.value=$('tradeTeamA')?.value||DEFAULT_TEAM;tb.value=$('tradeTeamB')?.value||TEAM_NAMES.find(t=>t!==ta.value);if(tb.value===ta.value)tb.value=TEAM_NAMES.find(t=>t!==ta.value);
+   ta.onchange=()=>populateMultiPlayers15();tb.onchange=()=>populateMultiPlayers15();$('v15Size').onchange=()=>updateMultiSlots15();$('v15Evaluate').onclick=evaluateMultiForm15;populateMultiPlayers15();updateMultiSlots15();
+ }
+ function populateMultiPlayers15(){const ta=$('v15TeamA')?.value,tb=$('v15TeamB')?.value;if(!ta||!tb)return;if(ta===tb){const alt=TEAM_NAMES.find(t=>t!==ta);if(alt){$('v15TeamB').value=alt}}const aa=roster($('v15TeamA').value),bb=roster($('v15TeamB').value);for(let i=1;i<=3;i++){optionPlayers15($(`v15Out${i}`),$('v15TeamA').value,aa[i-1]?.key);optionPlayers15($(`v15In${i}`),$('v15TeamB').value,bb[i-1]?.key)}}
+ function updateMultiSlots15(){const n=+$('v15Size').value;$('v15OutSlot3').classList.toggle('hidden',n<3);$('v15InSlot3').classList.toggle('hidden',n<3);$('v15Evaluate').textContent=`VALUTA ${n} VS ${n}`}
+ function setMultiForm15(ta,tb,n,outs,ins){createMultiTradeUI15();$('v15TeamA').value=ta;$('v15TeamB').value=tb;$('v15Size').value=String(n);populateMultiPlayers15();updateMultiSlots15();outs.forEach((k,i)=>{if($(`v15Out${i+1}`))$(`v15Out${i+1}`).value=k});ins.forEach((k,i)=>{if($(`v15In${i+1}`))$(`v15In${i+1}`).value=k})}
+ function renderMultiEval15(ev){if(!ev.valid)return `<div class="v15-verdict bad"><div class="big">ERRORE</div><div>${ev.error}</div></div>`;const out=ev.outs.map(r=>r.p.name).join(' + '),inn=ev.ins.map(r=>r.p.name).join(' + ');const metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;const warn=!ev.legalA||!ev.legalB?'<div class="market-reason" style="color:#ef8f99"><b>NON VALIDO:</b> dopo lo scambio almeno una rosa non riesce a costruire un XI Mantra legale.</div>':(!ev.gkBalanced?'<div class="market-reason" style="color:#e8b967"><b>ATTENZIONE:</b> lo scambio altera il numero di portieri nelle due rose; MAX GM lo considera poco realistico.</div>':'');return `<div class="v15-verdict ${ev.vclass}"><div class="tiny muted">VERDETTO MAX GM · ${ev.n} VS ${ev.n}</div><div class="big">${ev.verdict}</div><div class="v15-trade-line">${out}<span class="vs">⇄</span>${inn}</div><div class="tiny muted">${ev.ta} ↔ ${ev.tb}</div></div><div class="market-metrics">${metric('Vantaggio tuo',ev.ourScore.toFixed(0)+'/100',ev.ourScore>=65?'good':ev.ourScore<50?'bad':'warn')}${metric('Prob. accetta',ev.realism.toFixed(0)+'%',ev.realism>=65?'good':ev.realism<45?'bad':'warn')}${metric('XI oggi',safeSigned15(ev.xiNowDelta),ev.xiNowDelta>0?'good':ev.xiNowDelta<0?'bad':'')}${metric('XI futuro',safeSigned15(ev.futureXiDelta),ev.futureXiDelta>0?'good':'')}${metric('Struttura',safeSigned15(ev.structDelta),ev.structDelta>0?'good':'')}${metric('Loro',safeSigned15(ev.oppBenefit),ev.oppBenefit>=0?'good':'warn')}</div><div class="market-reason">${reason15(ev)}</div>${warn}<div class="grid g2" style="margin-top:10px"><div class="card" style="box-shadow:none"><h3>Valori scambio</h3><div class="roleline"><span>Valore percepito ceduto</span><span>${ev.marketOut.toFixed(0)}</span></div><div class="roleline"><span>Valore percepito ricevuto</span><span>${ev.marketIn.toFixed(0)}</span></div><div class="roleline"><span>Parità di mercato</span><span>${ev.marketParity.toFixed(0)}%</span></div><div class="roleline"><span>Costo asta</span><span>${ev.costOut.toFixed(0)} ↔ ${ev.costIn.toFixed(0)}</span></div></div><div class="card" style="box-shadow:none"><h3>Effetto rosa</h3><div class="roleline"><span>Modulo</span><span>${ev.moduleBefore} → <b>${ev.moduleAfter}</b></span></div><div class="roleline"><span>Miglior ruolo</span><span>${ev.bestGainGroup} ${safeSigned15(ev.bestGainValue)}</span></div><div class="roleline"><span>Interesse loro</span><span>${ev.interest.toFixed(0)}%</span></div><div class="roleline"><span>Affidabilità dati</span><span>${ev.dataConf.toFixed(0)}%</span></div></div></div>`}
+ function evaluateMultiForm15(){clearBaseCache15();const n=+$('v15Size').value,outs=[],ins=[];for(let i=1;i<=n;i++){outs.push($(`v15Out${i}`).value);ins.push($(`v15In${i}`).value)}if(unique15(outs).length!==n||unique15(ins).length!==n){const ev={valid:false,error:'Hai selezionato due volte lo stesso giocatore. Scegli giocatori diversi.'};$('v15MultiResult').innerHTML=renderMultiEval15(ev);return ev}const ev=evaluateMulti15($('v15TeamA').value,$('v15TeamB').value,outs,ins);$('v15MultiResult').innerHTML=renderMultiEval15(ev);return ev}
+ function brand15(){const v=document.querySelector('.version');if(v)v.textContent='V1.5.3 · SCAMBI MULTIPLI';document.title='MAX GM V1.5.3 — Scambi multipli';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.5.3 · ${DB?.meta?.name||''} · Formazione · Scambi 1vs1/2vs2/3vs3 · Idee automatiche · PWA`}
+ function wire15(){installMarketControl15();createMultiTradeUI15();brand15();const btn=$('marketRefresh');if(btn)btn.onclick=renderMarket15;const sel=$('marketTeam');if(sel)sel.onchange=renderMarket15;const fmt=$('marketFormat');if(fmt)fmt.onchange=renderMarket15;document.addEventListener('click',e=>{if(e.target.closest('[data-view="market"]'))setTimeout(()=>{installMarketControl15();brand15();renderMarket15()},180)});const old=window.switchLeague;window.switchLeague=function(k){old(k);setTimeout(()=>{installMarketControl15();createMultiTradeUI15();const ta=$('v15TeamA'),tb=$('v15TeamB');if(ta){ta.innerHTML=TEAM_NAMES.map(t=>`<option>${t}</option>`).join('');ta.value=DEFAULT_TEAM}if(tb){tb.innerHTML=TEAM_NAMES.map(t=>`<option>${t}</option>`).join('');tb.value=TEAM_NAMES.find(t=>t!==DEFAULT_TEAM)}populateMultiPlayers15();brand15();if($('market')?.classList.contains('active'))renderMarket15()},220)};
+ }
+ function selfTest15(){try{const ta=DEFAULT_TEAM,tb=TEAM_NAMES.find(t=>t!==ta),A=roster(ta),B=roster(tb),Af=A.filter(r=>!roles(r.p).has('P')),Bf=B.filter(r=>!roles(r.p).has('P'));const e2=evaluateMulti15(ta,tb,Af.slice(0,2).map(r=>r.key),Bf.slice(0,2).map(r=>r.key));const e3=evaluateMulti15(ta,tb,Af.slice(0,3).map(r=>r.key),Bf.slice(0,3).map(r=>r.key));const dup=evaluateMulti15(ta,tb,[Af[0].key,Af[0].key],[Bf[0].key,Bf[1].key]);const wrong=evaluateMulti15(ta,ta,[Af[0].key],[Af[1].key]);const t2=performance.now(),m2=suggestMulti15(ta,2,3),ms2=performance.now()-t2,t3=performance.now(),m3=suggestMulti15(ta,3,2),ms3=performance.now()-t3;const vals=[e2.score,e2.realism,e3.score,e3.realism].every(Number.isFinite),rosters=e2.A2.length===A.length&&e3.A2.length===A.length&&new Set(e3.A2.map(r=>r.key)).size===e3.A2.length;const auto=[...m2,...m3].every(x=>x.valid&&x.validAuto&&x.ta===ta&&x.tb!==ta&&Number.isFinite(x.score));return {ok:e2.valid&&e3.valid&&!dup.valid&&!wrong.valid&&vals&&rosters&&auto,e2:{score:e2.score,realism:e2.realism},e3:{score:e3.score,realism:e3.realism},suggest2:m2.length,suggest3:m3.length,ms2:+ms2.toFixed(0),ms3:+ms3.toFixed(0)}}catch(e){return {ok:false,error:String(e&&e.stack||e)}}}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',wire15);else wire15();
+ window.MAXGM_V15={version:V15,evaluateMulti:evaluateMulti15,suggestSingle:suggestSingle15,suggestMulti:suggestMulti15,renderMarket:renderMarket15,selfTest:selfTest15,setMultiForm:setMultiForm15};
+ if(new URLSearchParams(location.search).get('v15test')==='1'){setTimeout(()=>{const r=selfTest15(),d=document.createElement('div');d.id='v15-selftest';d.textContent=(r.ok?'V15_SELFTEST_OK ':'V15_SELFTEST_FAIL ')+JSON.stringify(r);document.body.appendChild(d)},900)}
 })();
 </script>
 

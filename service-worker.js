@@ -1,4 +1,4 @@
-const CACHE = "max-gm-v141-pwa-v1";
+const CACHE = "max-gm-v153-stress-v1";
 const ASSETS = [
   "./", "./index.html", "./manifest.webmanifest",
   "./icons/icon-192.png", "./icons/icon-512.png"

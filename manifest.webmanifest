@@ -1,7 +1,7 @@
 {
-  "name": "MAX GM - Fantacalcio",
+  "name": "MAX GM V1.5.3 — Scambi Multipli",
   "short_name": "MAX GM",
-  "description": "Assistente Fantacalcio per formazione, scambi, consigli automatici di mercato e analisi lega.",
+  "description": "MAX GM: formazione, scambi 1vs1, 2vs2 e 3vs3, idee automatiche calibrate e analisi lega.",
   "lang": "it-IT",
   "start_url": "./",
   "scope": "./",
