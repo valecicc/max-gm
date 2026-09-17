@@ -1,0 +1,14 @@
+{
+  "name": "MAX GM V1.5.5",
+  "short_name": "MAX GM",
+  "description": "MAX GM — Formazione, scambi 1vs1/2vs2/3vs3, idee automatiche e analisi lega.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": [
+    {"src":"icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
