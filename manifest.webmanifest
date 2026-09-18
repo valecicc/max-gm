@@ -1,7 +1,7 @@
 {
-  "name": "MAX GM V1.5.5",
+  "name": "MAX GM V1.6.1",
   "short_name": "MAX GM",
-  "description": "MAX GM — Formazione, scambi 1vs1/2vs2/3vs3, idee automatiche e analisi lega.",
+  "description": "MAX GM — Rose dinamiche, scambi mirati 1vs1/2vs2/3vs3, formazione e analisi lega.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
