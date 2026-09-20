@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
-<title>MAX GM V1.6.2 — Rose dinamiche e scambi mirati</title>
+<title>MAX GM V1.6.3 — Rose dinamiche e scambi mirati</title>
 <!-- PWA / installazione -->
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#07111f">
@@ -2049,8 +2049,22 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
     if(btn) btn.classList.remove('show');
   });
   if('serviceWorker' in navigator){
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js').catch(err => console.warn('Service Worker:', err));
+    window.addEventListener('load', async () => {
+      try{
+        const reg=await navigator.serviceWorker.register('./service-worker.js',{updateViaCache:'none'});
+        await reg.update();
+        let reloading=false;
+        navigator.serviceWorker.addEventListener('controllerchange',()=>{
+          if(reloading)return;reloading=true;
+          const k='maxgm-sw-reload-1.6.3';
+          if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,'1');location.reload()}
+        });
+        if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'});
+        reg.addEventListener('updatefound',()=>{
+          const nw=reg.installing;if(!nw)return;
+          nw.addEventListener('statechange',()=>{if(nw.state==='installed'&&navigator.serviceWorker.controller)nw.postMessage({type:'SKIP_WAITING'})});
+        });
+      }catch(err){console.warn('Service Worker:',err)}
     });
   }
 })();
@@ -2388,28 +2402,50 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    }}
    cand.sort((a,b)=>b.fast-a.fast);return cand.slice(0,n===2?6:4);
  }
+ function targetSafe15(ev,n){
+   if(!ev||!ev.valid||!ev.legalA||!ev.legalB||!ev.gkBalanced||ev.roleDiff?.critical||ev.oppRoleDiff?.critical)return false;
+   const minReal=n===1?43:n===2?45:47,minOur=n===1?52:n===2?53:54,minParity=n===1?24:n===2?28:32;
+   const gain=(ev.xiNowDelta>.10||ev.futureXiDelta>.20||ev.structDelta>.05||ev.bestGainValue>.70||ev.playerDelta>.50);
+   return ev.ourScore>=minOur&&ev.realism>=minReal&&ev.marketParity>=minParity&&ev.costParity>=16&&
+     ev.xiNowDelta>=-1.35&&ev.futureXiDelta>=-1.20&&ev.structDelta>=-.80&&ev.oppBenefit>=-1.35&&gain;
+ }
  function suggestTargeted15(team,requiredKey,tb,n,limit=4){
    if(!team||!tb||team===tb||n<1||n>3)return [];
    const A=roster(team),B=roster(tb),required=A.find(r=>r.key===requiredKey);if(!required||!B.length)return [];
    const req=fastPlayer15(team,tb,required,true,A,B);
-   const inPool=B.map(r=>fastPlayer15(tb,team,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,n===1?14:n===2?10:9);
+   // Ricerca mirata: una sola controparte consente pool più ampi. Evitiamo falsi "nessuno scambio"
+   // senza fare brute force completo: shortlist veloce, poi controllo Mantra esatto sui migliori candidati.
+   const inPool=B.map(r=>fastPlayer15(tb,team,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,n===1?B.length:n===2?18:16);
    let outSets=[];
    if(n===1)outSets=[[req]];
    else{
-     const others=A.filter(r=>r.key!==requiredKey).map(r=>fastPlayer15(team,tb,r,true,A,B)).sort((a,b)=>b.score-a.score).slice(0,n===2?8:7);
+     const others=A.filter(r=>r.key!==requiredKey).map(r=>fastPlayer15(team,tb,r,true,A,B)).sort((a,b)=>b.score-a.score).slice(0,n===2?12:10);
      outSets=comb15(others,n-1).map(xs=>[req,...xs]);
    }
    const inSets=comb15(inPool,n),fast=[];
    for(const os of outSets)for(const ins of inSets){
      if(gkCount15(os.map(x=>x.rec))!==gkCount15(ins.map(x=>x.rec)))continue;
-     const q=packageFast15(team,tb,os,ins),minParity=n===1?26:n===2?30:34;
-     if(q.marketParity<minParity||q.costParity<18||q.ourFast<46||q.realism<38)continue;
+     const q=packageFast15(team,tb,os,ins),minParity=n===1?14:n===2?20:25;
+     if(q.marketParity<minParity||q.costParity<8||q.ourFast<39||q.realism<29)continue;
      fast.push({tb,outs:os.map(x=>x.rec),ins:ins.map(x=>x.rec),fast:q.score,q});
    }
    fast.sort((a,b)=>b.fast-a.fast);const seen=new Set(),finalists=[];
-   for(const x of fast){const sig=x.outs.map(r=>r.key).slice().sort().join(',')+'|'+x.ins.map(r=>r.key).slice().sort().join(',');if(seen.has(sig))continue;seen.add(sig);finalists.push(x);if(finalists.length>=(n===1?6:n===2?6:4))break}
-   const exact=[];for(const x of finalists){const ev=evaluateMulti15(team,tb,x.outs.map(r=>r.key),x.ins.map(r=>r.key));if(ev.valid&&ev.validAuto&&ev.outs.some(r=>r.key===requiredKey)){exact.push(ev);if(exact.length>=limit)break}}
-   exact.sort((a,b)=>b.score-a.score);return exact.slice(0,limit);
+   const maxExact=n===1?Math.min(24,B.length):n===2?18:14;
+   for(const x of fast){
+     const sig=x.outs.map(r=>r.key).slice().sort().join(',')+'|'+x.ins.map(r=>r.key).slice().sort().join(',');
+     if(seen.has(sig))continue;seen.add(sig);finalists.push(x);if(finalists.length>=maxExact)break;
+   }
+   const strict=[],negotiable=[];
+   for(const x of finalists){
+     const ev=evaluateMulti15(team,tb,x.outs.map(r=>r.key),x.ins.map(r=>r.key));
+     if(!ev.valid||!ev.outs.some(r=>r.key===requiredKey))continue;
+     if(ev.validAuto){ev.targetTier='strict';strict.push(ev)}
+     else if(targetSafe15(ev,n)){ev.targetTier='negotiable';negotiable.push(ev)}
+     if(strict.length>=limit)break;
+   }
+   strict.sort((a,b)=>b.score-a.score);negotiable.sort((a,b)=>b.score-a.score);
+   const picked=[...strict];for(const x of negotiable){if(picked.length>=limit)break;picked.push(x)}
+   return picked.slice(0,limit);
  }
  function suggestMulti15(team,n,limit=3){
    const fastAll=[];
@@ -2528,7 +2564,7 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
 <script id="maxgm-v16-js">
 (function(){
 'use strict';
-const V16='V1.6.2';
+const V16='V1.6.3';
 const $=id=>document.getElementById(id);
 const q=s=>document.querySelector(s);
 const clamp16=(x,a=0,b=100)=>Math.max(a,Math.min(b,Number.isFinite(+x)?+x:a));
@@ -2573,12 +2609,12 @@ function targetedIdeas16(team,selectedKey,opp,format){let rr=[];if(format==='all
  const best1=rr.find(x=>x.n===1),best2=rr.find(x=>x.n===2);rr=rr.filter(x=>{if(x.n===2&&best1&&x.score<best1.score+1.0&&x.futureXiDelta<=best1.futureXiDelta+.5&&x.structDelta<=best1.structDelta+.25)return false;if(x.n===3){const ref=best2||best1;if(ref&&x.score<ref.score+1.8&&x.futureXiDelta<=ref.futureXiDelta+.7&&x.structDelta<=ref.structDelta+.35)return false}return true})}
  return rr.slice(0,5)}
 function signed16(v){return `${v>=0?'+':''}${Number(v||0).toFixed(1)}`}
-function targetCard16(c,hero=false){const fmt=`${c.n} VS ${c.n}`,outs=c.outs.map(r=>r.p.name).join(' + '),ins=c.ins.map(r=>r.p.name).join(' + '),metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;return `<div class="${hero?'market-hero-pick':'market-card'} v16-focus"><div class="market-hero-row"><div><div class="${hero?'market-kicker':''}">${hero?'MIGLIORE PROPOSTA CONTRO QUESTA SQUADRA':''}</div><div class="${hero?'market-maintrade':'trade'}"><span class="v15-format-badge">${fmt}</span>${outs} <span style="color:#f1c75b">→</span> ${ins}</div><div class="team">${c.tb} · proposta vincolata al giocatore scelto</div></div><div class="${hero?'market-overall':'score'}">${c.score.toFixed(0)}<${hero?'span':'small'}>QUALITÀ /100</${hero?'span':'small'}></div></div><div class="market-tagrow"><span class="market-tag gold">${fmt}</span><span class="market-tag good">MIRATA</span>${c.realism>=65?'<span class="market-tag good">REALISTICA</span>':''}</div><div class="market-metrics">${metric('XI oggi',signed16(c.xiNowDelta),c.xiNowDelta>0?'good':'')}${metric('XI futuro',signed16(c.futureXiDelta),c.futureXiDelta>0?'good':'')}${metric('Struttura',signed16(c.structDelta),c.structDelta>0?'good':'')}${metric('Loro',signed16(c.oppBenefit),c.oppBenefit>=0?'good':'warn')}${metric('Accetta',c.realism.toFixed(0)+'%',c.realism>=65?'good':c.realism<50?'bad':'warn')}${metric('Parità',c.marketParity.toFixed(0)+'%',c.marketParity>=70?'good':'')}</div><div class="market-reason">${c.n===1?'Scambio diretto che supera i filtri di convenienza e realismo.':`La pedina aggiuntiva serve a riequilibrare valore e ruoli: MAX GM la mantiene solo se il ${fmt} migliora davvero la trattativa.`}</div><div class="market-card-actions"><button class="action secondary" data-v16-team="${encodeURIComponent(c.tb)}" data-v16-n="${c.n}" data-v16-out="${c.outs.map(r=>r.key).join(',')}" data-v16-in="${c.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
+function targetCard16(c,hero=false){const fmt=`${c.n} VS ${c.n}`,outs=c.outs.map(r=>r.p.name).join(' + '),ins=c.ins.map(r=>r.p.name).join(' + '),tier=c.targetTier==='negotiable'?'TRATTATIVA':'VALIDATA',tierClass=c.targetTier==='negotiable'?'warn':'good',metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;return `<div class="${hero?'market-hero-pick':'market-card'} v16-focus"><div class="market-hero-row"><div><div class="${hero?'market-kicker':''}">${hero?'MIGLIORE PROPOSTA CONTRO QUESTA SQUADRA':''}</div><div class="${hero?'market-maintrade':'trade'}"><span class="v15-format-badge">${fmt}</span>${outs} <span style="color:#f1c75b">→</span> ${ins}</div><div class="team">${c.tb} · proposta vincolata al giocatore scelto</div></div><div class="${hero?'market-overall':'score'}">${c.score.toFixed(0)}<${hero?'span':'small'}>QUALITÀ /100</${hero?'span':'small'}></div></div><div class="market-tagrow"><span class="market-tag gold">${fmt}</span><span class="market-tag good">MIRATA</span><span class="market-tag ${tierClass}">${tier}</span>${c.realism>=65?'<span class="market-tag good">REALISTICA</span>':''}</div><div class="market-metrics">${metric('XI oggi',signed16(c.xiNowDelta),c.xiNowDelta>0?'good':'')}${metric('XI futuro',signed16(c.futureXiDelta),c.futureXiDelta>0?'good':'')}${metric('Struttura',signed16(c.structDelta),c.structDelta>0?'good':'')}${metric('Loro',signed16(c.oppBenefit),c.oppBenefit>=0?'good':'warn')}${metric('Accetta',c.realism.toFixed(0)+'%',c.realism>=65?'good':c.realism<50?'bad':'warn')}${metric('Parità',c.marketParity.toFixed(0)+'%',c.marketParity>=70?'good':'')}</div><div class="market-reason">${c.targetTier==='negotiable'?'Proposta negoziabile: resta conveniente e legalmente sostenibile per entrambe le rose, ma richiede più trattativa rispetto ai filtri automatici più severi.':c.n===1?'Scambio diretto che supera i filtri di convenienza e realismo.':`La pedina aggiuntiva serve a riequilibrare valore e ruoli: MAX GM la mantiene solo se il ${fmt} migliora davvero la trattativa.`}</div><div class="market-card-actions"><button class="action secondary" data-v16-team="${encodeURIComponent(c.tb)}" data-v16-n="${c.n}" data-v16-out="${c.outs.map(r=>r.key).join(',')}" data-v16-in="${c.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
 function populateTargetControls16(){const team=$('marketTeam')?.value||DEFAULT_TEAM,ps=$('v16MarketPlayer'),os=$('v16MarketOpponent');if(!ps||!os)return;const pv=ps.value,ov=os.value;const arr=roster(team).slice().sort((a,b)=>baseRating(b.p)-baseRating(a.p));ps.innerHTML='<option value="">QUALSIASI GIOCATORE</option>'+arr.map(r=>`<option value="${r.key}">${r.p.name} · ${r.p.role} · GM ${baseRating(r.p).toFixed(0)}</option>`).join('');if(arr.some(r=>r.key===pv))ps.value=pv;os.innerHTML='<option value="">TUTTE LE SQUADRE</option>'+TEAM_NAMES.filter(t=>t!==team).map(t=>`<option value="${encodeURIComponent(t)}">${t}</option>`).join('');if(TEAM_NAMES.includes(decodeURIComponent(ov||''))&&decodeURIComponent(ov)!==team)os.value=encodeURIComponent(decodeURIComponent(ov));}
 function installTargetControls16(){const base=q('#market .v15-market-format')||q('#market .market-controls');if(!base||$('v16TargetControls'))return;const d=document.createElement('div');d.id='v16TargetControls';d.className='v16-target-wrap card';d.innerHTML=`<div class="control"><label>Giocatore da proporre</label><select id="v16MarketPlayer"></select></div><div class="control"><label>Proponilo a squadra specifica</label><select id="v16MarketOpponent"></select></div><div class="control"><label>Modalità</label><div class="select" id="v16TargetMode">RICERCA NORMALE</div></div><button class="action" id="v16TargetSearch">CERCA PROPOSTE</button><div class="v16-target-hint">Se scegli sia il giocatore sia la squadra, ogni proposta dovrà includere quel giocatore e sarà calcolata soltanto contro quella controparte.</div>`;base.insertAdjacentElement('afterend',d);populateTargetControls16();$('v16TargetSearch').onclick=renderMarket16;$('v16MarketPlayer').onchange=()=>{updateTargetMode16();if($('v16MarketOpponent').value)renderMarket16()};$('v16MarketOpponent').onchange=()=>{updateTargetMode16();if($('v16MarketPlayer').value)renderMarket16()};}
 function updateTargetMode16(){const p=$('v16MarketPlayer')?.value,o=$('v16MarketOpponent')?.value,m=$('v16TargetMode');if(!m)return;if(p&&o){m.textContent='MIRATA · 1/2/3 VS';m.classList.add('v16-target-active')}else{m.textContent='RICERCA NORMALE';m.classList.remove('v16-target-active')}}
 function wireTargetButtons16(root,team){root.querySelectorAll('[data-v16-team]').forEach(b=>b.onclick=()=>{const tb=decodeURIComponent(b.dataset.v16Team),n=+b.dataset.v16N,outs=b.dataset.v16Out.split(','),ins=b.dataset.v16In.split(',');[...document.querySelectorAll('.tab')].find(x=>x.dataset.view==='trade')?.click();setTimeout(()=>{if(n===1){$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=outs[0];$('tradePlayerB').value=ins[0];analyzeTrade();$('tradeResult')?.scrollIntoView({behavior:'smooth',block:'start'})}else{window.MAXGM_V15.setMultiForm(team,tb,n,outs,ins);const btn=$('v15Evaluate');btn?.click();$('v15MultiResult')?.scrollIntoView({behavior:'smooth',block:'start'})}},130)})}
-function renderMarket16(){installTargetControls16();const team=$('marketTeam')?.value||DEFAULT_TEAM,pk=$('v16MarketPlayer')?.value||'',ov=$('v16MarketOpponent')?.value||'',opp=ov?decodeURIComponent(ov):'',format=$('marketFormat')?.value||'all';if(!(pk&&opp)){window.MAXGM_V15.renderMarket();updateTargetMode16();return}const out=$('marketOutput'),st=$('marketStatus'),sel=roster(team).find(r=>r.key===pk);if(!out||!sel)return;if(st)st.textContent=`Cerco proposte reali per ${sel.p.name} esclusivamente con ${opp}…`;out.innerHTML='<div class="smart-empty">Confronto 1vs1 / 2vs2 / 3vs3 contro la squadra scelta…</div>';setTimeout(()=>{const t0=performance.now(),rr=targetedIdeas16(team,pk,opp,format),ms=performance.now()-t0;if(!rr.length){out.innerHTML=`<div class="smart-empty"><b>NON FORZEREI UNO SCAMBIO CON ${opp}.</b><br><br>Tenendo ${sel.p.name} obbligatoriamente nella proposta, nessun 1vs1/2vs2/3vs3 supera insieme i filtri di convenienza per te, legalità Mantra e realismo per la controparte.</div>`;if(st)st.textContent=`${sel.p.name} → ${opp} · nessuna proposta abbastanza solida · ${ms.toFixed(0)} ms`;return}const counts=[1,2,3].map(n=>rr.filter(x=>x.n===n).length),avg=avg16(rr.map(x=>x.realism));out.innerHTML=`<div class="v16-target-summary"><div><span>Giocatore</span><b>${sel.p.name}</b></div><div><span>Controparte</span><b>${opp}</b></div><div><span>Proposte</span><b>${rr.length}</b></div><div><span>1v1 · 2v2 · 3v3</span><b>${counts.join(' · ')}</b></div></div>`+targetCard16(rr[0],true)+(rr.length>1?`<div class="market-section-title"><b>ALTRE PROPOSTE REALI</b><div>Il giocatore scelto è sempre incluso. Le multiple compaiono solo se giustificano la complessità.</div></div><div class="market-list">${rr.slice(1).map(x=>targetCard16(x,false)).join('')}</div>`:'');wireTargetButtons16(out,team);if(st)st.textContent=`${DB.meta.name} · ${sel.p.name} → ${opp} · ${rr.length} proposte reali · realismo medio ${avg.toFixed(0)}% · ${ms.toFixed(0)} ms`},30)}
+function renderMarket16(){installTargetControls16();const team=$('marketTeam')?.value||DEFAULT_TEAM,pk=$('v16MarketPlayer')?.value||'',ov=$('v16MarketOpponent')?.value||'',opp=ov?decodeURIComponent(ov):'',format=$('marketFormat')?.value||'all';if(!(pk&&opp)){window.MAXGM_V15.renderMarket();updateTargetMode16();return}const out=$('marketOutput'),st=$('marketStatus'),sel=roster(team).find(r=>r.key===pk);if(!out||!sel)return;if(st)st.textContent=`Cerco proposte reali per ${sel.p.name} esclusivamente con ${opp}…`;out.innerHTML='<div class="smart-empty">Confronto 1vs1 / 2vs2 / 3vs3 contro la squadra scelta…</div>';setTimeout(()=>{const t0=performance.now(),rr=targetedIdeas16(team,pk,opp,format),ms=performance.now()-t0;if(!rr.length){out.innerHTML=`<div class="smart-empty"><b>NON FORZEREI UNO SCAMBIO CON ${opp}.</b><br><br>Tenendo ${sel.p.name} obbligatoriamente nella proposta, nessun 1vs1/2vs2/3vs3 resta sufficientemente conveniente per te e sostenibile per entrambe le rose, anche dopo la ricerca estesa.</div>`;if(st)st.textContent=`${sel.p.name} → ${opp} · nessuna proposta abbastanza solida · ${ms.toFixed(0)} ms`;return}const counts=[1,2,3].map(n=>rr.filter(x=>x.n===n).length),avg=avg16(rr.map(x=>x.realism));out.innerHTML=`<div class="v16-target-summary"><div><span>Giocatore</span><b>${sel.p.name}</b></div><div><span>Controparte</span><b>${opp}</b></div><div><span>Proposte</span><b>${rr.length}</b></div><div><span>1v1 · 2v2 · 3v3</span><b>${counts.join(' · ')}</b></div></div>`+targetCard16(rr[0],true)+(rr.length>1?`<div class="market-section-title"><b>ALTRE PROPOSTE REALI</b><div>Il giocatore scelto è sempre incluso. Le multiple compaiono solo se giustificano la complessità.</div></div><div class="market-list">${rr.slice(1).map(x=>targetCard16(x,false)).join('')}</div>`:'');wireTargetButtons16(out,team);if(st)st.textContent=`${DB.meta.name} · ${sel.p.name} → ${opp} · ${rr.length} proposte reali · realismo medio ${avg.toFixed(0)}% · ${ms.toFixed(0)} ms`},30)}
 
 // ---------- ROSE DINAMICHE / SYNC ----------
 function playerIndex16(){const exact=new Map(),compact=new Map(),all=[];for(const [k,p] of Object.entries(PLAYER_DB)){const n=norm16(p.name),c=compact16(p.name);if(!exact.has(n))exact.set(n,[]);exact.get(n).push(k);if(!compact.has(c))compact.set(c,[]);compact.get(c).push(k);all.push([k,n])}return {exact,compact,all}}
@@ -2602,9 +2638,9 @@ function installSyncUI16(){const sec=$('league');if(!sec||$('v16SyncCard'))retur
 function maybeAutoSync16(){const c=syncConfig16();if(!c.auto||!c.url||!c.token||activeLeague!=='urbe')return;const k='maxgm-v16:last-auto-sync',last=+localStorage.getItem(k)||0;if(Date.now()-last<15*60*1000)return;localStorage.setItem(k,String(Date.now()));previewSync16(true)}
 
 // ---------- Branding / wiring ----------
-function brand16(){const v=q('.version');if(v&&v.textContent!=='V1.6.2 · ROSE LIVE + SCAMBI MIRATI')v.textContent='V1.6.2 · ROSE LIVE + SCAMBI MIRATI';document.title='MAX GM V1.6.2 — Rose live e scambi mirati';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.6.2 · ${DB?.meta?.name||''} · Rose dinamiche · Scambi mirati 1vs1/2vs2/3vs3 · PWA`}
+function brand16(){const v=q('.version');if(v&&v.textContent!=='V1.6.3 · TARGET FIX + PWA UPDATE')v.textContent='V1.6.3 · TARGET FIX + PWA UPDATE';document.title='MAX GM V1.6.3 — Target fix e PWA update';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.6.3 · ${DB?.meta?.name||''} · Rose dinamiche · Scambi mirati 1vs1/2vs2/3vs3 · PWA`}
 function wire16(){installTargetControls16();installSyncUI16();brand16();const team=$('marketTeam'),fmt=$('marketFormat'),btn=$('marketRefresh');if(btn)btn.onclick=renderMarket16;if(team)team.onchange=()=>{populateTargetControls16();updateTargetMode16();renderMarket16()};if(fmt)fmt.onchange=renderMarket16;document.addEventListener('click',e=>{if(e.target.closest('[data-view="market"]'))setTimeout(()=>{installTargetControls16();populateTargetControls16();updateTargetMode16();brand16()},260);if(e.target.closest('[data-view="league"]'))setTimeout(()=>{installSyncUI16();renderSyncMeta16();brand16()},120)});globalLeague?.addEventListener('change',()=>setTimeout(()=>{installTargetControls16();populateTargetControls16();installSyncUI16();renderSyncMeta16();brand16()},360));const v=q('.version');if(v)new MutationObserver(()=>brand16()).observe(v,{childList:true,characterData:true,subtree:true});setTimeout(maybeAutoSync16,1200)}
-function selfTest16(){try{const team=DEFAULT_TEAM,opp=TEAM_NAMES.find(t=>t!==team),A=roster(team),sel=A.find(r=>!roles(r.p).has('P'))||A[0],r1=targetedN16(team,sel.key,opp,1,2),r2=targetedN16(team,sel.key,opp,2,2);const targeted=[...r1,...r2].every(x=>x.valid&&x.validAuto&&x.tb===opp&&x.outs.some(r=>r.key===sel.key));const saved=clone16(LEAGUES[activeLeague].rosters),mockTeams=Object.keys(saved).map((name,i)=>({id:String(i+1),name})),mockR=[];for(const [i,t] of Object.keys(saved).entries())for(const r of saved[t])mockR.push({teamId:String(i+1),name:PLAYER_DB[r.key].name,acquisitionCost:r.price});const z=normalizeRemote16({ok:true,teams:mockTeams,rosters:mockR}),syncOk=!z.unmatchedTeams.length&&!z.unmatchedPlayers.length&&!z.duplicates.length&&z.remoteCount===mockR.length;return {ok:targeted&&syncOk,team,opp,player:sel.p.name,r1:r1.length,r2:r2.length,targeted,syncOk,remote:z.remoteCount}}catch(e){return {ok:false,error:String(e&&e.stack||e)}}}
+function selfTest16(){try{const team=DEFAULT_TEAM,A=roster(team),opps=TEAM_NAMES.filter(t=>t!==team),sample=A.filter(r=>!roles(r.p).has('P')).slice(0,6);let probe=null;for(const sel of sample){for(const opp of opps){const r1=targetedN16(team,sel.key,opp,1,2);if(r1.length){probe={sel,opp,r1};break}}if(probe)break}const targeted=!!probe&&probe.r1.every(x=>x.valid&&x.tb===probe.opp&&x.outs.some(r=>r.key===probe.sel.key)&&(x.validAuto||x.targetTier==='negotiable'));const saved=clone16(LEAGUES[activeLeague].rosters),mockTeams=Object.keys(saved).map((name,i)=>({id:String(i+1),name})),mockR=[];for(const [i,t] of Object.keys(saved).entries())for(const r of saved[t])mockR.push({teamId:String(i+1),name:PLAYER_DB[r.key].name,acquisitionCost:r.price});const z=normalizeRemote16({ok:true,teams:mockTeams,rosters:mockR}),syncOk=!z.unmatchedTeams.length&&!z.unmatchedPlayers.length&&!z.duplicates.length&&z.remoteCount===mockR.length;return {ok:targeted&&syncOk,team,opp:probe?.opp||null,player:probe?.sel?.p?.name||null,r1:probe?.r1?.length||0,targeted,syncOk,remote:z.remoteCount}}catch(e){return {ok:false,error:String(e&&e.stack||e)}}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',wire16);else wire16();
 window.MAXGM_V16={version:V16,targetedIdeas:targetedIdeas16,previewSync:previewSync16,applySync:applyPending16,selfTest:selfTest16};
 if(new URLSearchParams(location.search).get('v16test')==='1')setTimeout(()=>{const r=selfTest16(),d=document.createElement('div');d.id='v16-selftest';d.textContent=(r.ok?'V16_SELFTEST_OK ':'V16_SELFTEST_FAIL ')+JSON.stringify(r);document.body.appendChild(d)},1300);
@@ -2625,7 +2661,7 @@ if(new URLSearchParams(location.search).get('v16test')==='1')setTimeout(()=>{con
 <script id="maxgm-v161-js">
 (function(){
 'use strict';
-const V161='V1.6.2';
+const V161='V1.6.3';
 const $161=id=>document.getElementById(id);
 const clone161=x=>JSON.parse(JSON.stringify(x));
 const norm161=v=>String(v??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘`´]/g,"'").replace(/[^a-zA-Z0-9]+/g,' ').trim().toLowerCase().replace(/\s+/g,' ');
@@ -2668,11 +2704,11 @@ function normalizeImport161(rows){const next={};for(const t of Object.keys(LEAGU
 let pendingImport161=null;
 async function previewImport161(file){try{const text=await file.text();let rows=[];if(file.name.toLowerCase().endsWith('.json')){const j=JSON.parse(text);if(Array.isArray(j))rows=j;else if(Array.isArray(j.rosters))rows=j.rosters.map(x=>({team:x.team||x.teamName||x.fantasyTeamName,name:x.name||x.playerName,acquisitionCost:x.acquisitionCost??x.cost??x.price??0}));else throw new Error('JSON non riconosciuto. Usa un array di righe o il formato MAX GM.')}else rows=rowsFromCsv161(text);const z=normalizeImport161(rows),teams=Object.values(z.next).filter(a=>a.length).length,expected=Object.keys(z.next).length;if(z.badTeams.length||z.badPlayers.length||z.dup.length||teams!==expected){pendingImport161=null;setStatus161(`<b>IMPORT BLOCCATO PER SICUREZZA.</b><br>${z.badTeams.length?`Squadre non riconosciute: ${z.badTeams.slice(0,6).join(', ')}.<br>`:''}${z.badPlayers.length?`Giocatori non riconosciuti: ${z.badPlayers.slice(0,8).join(', ')}.<br>`:''}${z.dup.length?`Duplicati: ${z.dup.slice(0,6).join(', ')}.<br>`:''}Letti ${z.count} giocatori in ${teams}/${expected} squadre. Nessuna rosa modificata.`,'bad');return}const oldMap=new Map();for(const [t,a] of Object.entries(LEAGUES[activeLeague].rosters))for(const r of a)oldMap.set(r.key,t);const changes=[];for(const [t,a] of Object.entries(z.next))for(const r of a){const from=oldMap.get(r.key);if(from&&from!==t)changes.push(`${playerName161(r.key)}: ${from} → ${t}`)}pendingImport161=z.next;setStatus161(`<b>File letto correttamente.</b> ${z.count} giocatori · ${changes.length} movimenti rilevati.${changes.length?'<br>'+changes.slice(0,10).join('<br>')+(changes.length>10?`<br>+ ${changes.length-10} altri`:''):'<br>Nessuna variazione di squadra.'}<div class="v161-manager-actions"><button class="action" id="v161ApplyImport">APPLICA FILE</button></div>`,'good');setTimeout(()=>{$161('v161ApplyImport').onclick=applyImport161},0)}catch(e){pendingImport161=null;setStatus161(`<b>File non importato.</b> ${String(e.message||e)}`,'bad')}}
 function applyImport161(){if(!pendingImport161)return;const before=clone161(LEAGUES[activeLeague].rosters);pushHistory161(before,{source:'Import file',label:'Aggiornamento rose da file'});saveRosters161(pendingImport161,{source:'Import file'});pendingImport161=null;refresh161();setStatus161('<b>File applicato.</b> Tutte le sezioni di MAX GM usano ora le rose importate.','good')}
-function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.6.2 · DINAMICHE</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".csv,.json,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">CSV: colonne minime <b>Squadra</b> e <b>Giocatore</b>; opzionale <b>Costo</b>. Prima dell’applicazione MAX GM mostra errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
+function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.6.3 · DINAMICHE</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".csv,.json,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">CSV: colonne minime <b>Squadra</b> e <b>Giocatore</b>; opzionale <b>Costo</b>. Prima dell’applicazione MAX GM mostra errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
 function refreshTarget161(){const team=$161('marketTeam')?.value||DEFAULT_TEAM,p=$161('v16MarketPlayer'),o=$161('v16MarketOpponent');if(p){const keep=p.value;p.innerHTML='<option value="">QUALSIASI GIOCATORE</option>'+roster(team).slice().sort((a,b)=>baseRating(b.p)-baseRating(a.p)).map(r=>`<option value="${r.key}">${r.p.name} · ${r.p.role}</option>`).join('');if([...p.options].some(x=>x.value===keep))p.value=keep}if(o){const keep=o.value;o.innerHTML='<option value="">QUALSIASI SQUADRA</option>'+TEAM_NAMES.filter(t=>t!==team).map(t=>`<option value="${encodeURIComponent(t)}">${t}</option>`).join('');if([...o.options].some(x=>x.value===keep))o.value=keep}}
 function injectDone161(){const root=$161('marketOutput');if(!root)return;root.querySelectorAll('[data-v16-team],[data-v15-team]').forEach(b=>{if(b.parentElement?.querySelector('.v161-done'))return;const d=document.createElement('button');d.className='action secondary v161-done';d.textContent='SCAMBIO CONCLUSO';for(const k of ['team','n','out','in']){const v=b.dataset['v16'+k.charAt(0).toUpperCase()+k.slice(1)]??b.dataset['v15'+k.charAt(0).toUpperCase()+k.slice(1)];if(v!=null)d.dataset[k]=v}b.insertAdjacentElement('afterend',d)})}
 function wireDone161(){document.addEventListener('click',e=>{const b=e.target.closest('.v161-done');if(!b)return;const team=$161('marketTeam')?.value||DEFAULT_TEAM,tb=decodeURIComponent(b.dataset.team||''),outs=(b.dataset.out||'').split(',').filter(Boolean),ins=(b.dataset.in||'').split(',').filter(Boolean);if(!tb||!outs.length||outs.length!==ins.length){alert('Dati dello scambio incompleti.');return}if(!confirm(`Segnare come CONCLUSO ${outs.map(playerName161).join(' + ')} ⇄ ${ins.map(playerName161).join(' + ')} con ${tb}?`))return;const r=applyTrade161(team,tb,outs,ins,'Scambio concluso da MAX GM');alert(r.ok?'Rose aggiornate in tutto MAX GM.':r.error)})}
-function brand161(){const v=document.querySelector('.version');const txt='V1.6.2 · ROSE LIVE + SCAMBI MIRATI';if(v&&v.textContent!==txt)v.textContent=txt;if(document.title!=='MAX GM V1.6.2 — Rose dinamiche e scambi mirati')document.title='MAX GM V1.6.2 — Rose dinamiche e scambi mirati'}
+function brand161(){const v=document.querySelector('.version');const txt='V1.6.3 · TARGET FIX + PWA UPDATE';if(v&&v.textContent!==txt)v.textContent=txt;if(document.title!=='MAX GM V1.6.3 — Rose dinamiche e scambi mirati')document.title='MAX GM V1.6.3 — Rose dinamiche e scambi mirati'}
 function selfTest161(){try{const league=activeLeague,before=clone161(LEAGUES[league].rosters),ta=DEFAULT_TEAM,tb=TEAM_NAMES.find(t=>t!==ta),a=roster(ta).find(r=>!roles(r.p).has('P'))||roster(ta)[0],b=roster(tb).find(r=>!roles(r.p).has('P'))||roster(tb)[0];const r=applyTrade161(ta,tb,[a.key],[b.key],'SELFTEST');const moved=teamOf161(a.key)===tb&&teamOf161(b.key)===ta;LEAGUES[league].rosters=before;localStorage.setItem(rosterKey161(league),JSON.stringify({version:V161,rosters:before}));const h=hist161().filter(x=>x.source!=='SELFTEST');saveHist161(h);refresh161();return {ok:!!r.ok&&moved,manual:r.ok,moved,ta,tb,a:a.p.name,b:b.p.name}}catch(e){return {ok:false,error:String(e&&e.stack||e)}}}
 function boot161(){installManager161();wireDone161();brand161();const mo=$161('marketOutput');if(mo)new MutationObserver(()=>injectDone161()).observe(mo,{childList:true,subtree:true});injectDone161();document.addEventListener('click',e=>{if(e.target.closest('[data-view="league"]'))setTimeout(()=>{installManager161();brand161()},160);if(e.target.closest('[data-view="market"]'))setTimeout(()=>{refreshTarget161();injectDone161();brand161()},320)});globalLeague?.addEventListener('change',()=>setTimeout(()=>{installManager161();refreshManagerSelectors161();refreshTarget161();brand161()},420));const v=document.querySelector('.version');if(v)new MutationObserver(()=>brand161()).observe(v,{childList:true,subtree:true})}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot161);else boot161();
@@ -2683,8 +2719,8 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
 
 <script id="maxgm-v162-stability">
 (function(){
- const TXT='V1.6.2 · ROSE LIVE + SCAMBI MIRATI';
- const TITLE='MAX GM V1.6.2 — Rose dinamiche e scambi mirati';
+ const TXT='V1.6.3 · TARGET FIX + PWA UPDATE';
+ const TITLE='MAX GM V1.6.3 — Rose dinamiche e scambi mirati';
  function stabilize(){
    const v=document.querySelector('.version');if(v&&v.textContent!==TXT)v.textContent=TXT;
    if(document.title!==TITLE)document.title=TITLE;
@@ -2692,7 +2728,123 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(stabilize,0));else setTimeout(stabilize,0);
  document.getElementById('globalLeague')?.addEventListener('change',()=>setTimeout(stabilize,500));
- window.MAXGM_V162={version:'V1.6.2',stabilize};
+ window.MAXGM_V162={version:'V1.6.3',stabilize};
 })();
 </script>
+
+<style id="maxgm-v164-news-css">
+.v164-alert{border:1px solid #7a5830;background:linear-gradient(135deg,rgba(142,78,30,.20),rgba(18,34,50,.92));border-radius:16px;padding:14px 16px;margin:0 0 12px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center}
+.v164-alert.critical{border-color:#9a4248;background:linear-gradient(135deg,rgba(145,48,55,.25),rgba(18,34,50,.94))}.v164-alert.good{border-color:#276b56;background:linear-gradient(135deg,rgba(34,111,82,.18),rgba(18,34,50,.94))}
+.v164-kicker{font-size:9px;font-weight:950;letter-spacing:.14em;color:#f1c75b}.v164-alert.critical .v164-kicker{color:#ff9da5}.v164-alert h3{margin:3px 0 4px;font-size:18px}.v164-alert p{margin:0;color:#9eb1c0;font-size:11px;line-height:1.45}.v164-alert b{color:#eef5ff}.v164-alert-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.v164-alert button{white-space:nowrap}
+.v164-newsmeta{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.v164-pill{border:1px solid #31506d;background:#0b1a29;border-radius:999px;padding:4px 8px;font-size:8px;font-weight:900;color:#9eb1c0}.v164-pill.bad{border-color:#744047;color:#ff9da5}.v164-pill.good{border-color:#2b654f;color:#73d8a8}.v164-pill.gold{border-color:#6f5a2e;color:#f1c75b}
+.v164-gk-results{display:grid;gap:9px;margin-bottom:12px}.v164-gk-card{border:1px solid #294864;background:#081725;border-radius:14px;padding:12px}.v164-gk-head{display:grid;grid-template-columns:1fr auto;gap:10px}.v164-gk-trade{font-size:15px;font-weight:950}.v164-gk-score{font-size:22px;font-weight:950;color:#f1c75b;text-align:right}.v164-gk-score small{display:block;font-size:7px;color:#8198aa}.v164-gk-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.v164-gk-reason{font-size:10px;line-height:1.5;color:#9eb1c0;margin-top:8px}.v164-livebox{border:1px solid #294864;background:#0a1827;border-radius:14px;padding:12px;margin-bottom:12px}.v164-live-row{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.v164-live-row h3{margin:0 0 3px}.v164-live-state{font-size:9px;color:#9eb1c0}.v164-live-state b{color:#eef5ff}
+@media(max-width:760px){.v164-alert{grid-template-columns:1fr}.v164-alert-actions{justify-content:flex-start}.v164-gk-head{grid-template-columns:1fr}.v164-gk-score{text-align:left}}
+</style>
+
+<script id="maxgm-v164-news-risk">
+(function(){
+'use strict';
+const V='V1.6.4', BADGE='V1.6.4 · NEWS AWARE + GK EMERGENCY', TITLE='MAX GM V1.6.4 — News, rischio rosa e mercato';
+const $=id=>document.getElementById(id);
+const NEWS_KEY='maxgm-v164:news-cache', CHECK_KEY='maxgm-v164:last-news-check';
+const EMBEDDED={
+ 'p:grabara':{key:'p:grabara',name:'Grabara',club:'Juventus',status:'out',severity:'long',starter:0,vote:0,source:'JUVENTUS OFFICIAL',updatedAt:'2026-09-19T18:00:00+02:00',note:'Lesione del legamento crociato anteriore del ginocchio destro; iter terapeutico da definire.'}
+};
+function esc(s){return String(s??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]))}
+function norm(s){return String(s??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[’‘`´]/g,"'").replace(/[^a-zA-Z0-9]+/g,' ').trim().toLowerCase().replace(/\s+/g,' ')}
+function ts(x){const t=Date.parse(x||'');return Number.isFinite(t)?t:0}
+function loadNews(){let x={};try{x=JSON.parse(localStorage.getItem(NEWS_KEY)||'{}')||{}}catch(e){}for(const [k,v] of Object.entries(EMBEDDED)){if(!x[k]||ts(v.updatedAt)>=ts(x[k].updatedAt))x[k]=v}return x}
+let NEWS=loadNews();
+function saveNews(){try{localStorage.setItem(NEWS_KEY,JSON.stringify(NEWS))}catch(e){}}
+function mergeNews(rows){let changed=0;for(const r0 of rows||[]){const r={...r0};let key=r.key;if(!key&&r.name){const nn=norm(r.name);key=Object.keys(PLAYER_DB||{}).find(k=>norm(PLAYER_DB[k]?.name)===nn)||''}if(!key||!PLAYER_DB[key])continue;r.key=key;r.updatedAt=r.updatedAt||new Date().toISOString();const old=NEWS[key],op=String(old?.source||'').includes('OFFICIAL')?3:String(old?.source||'').includes('FANTACALCIO')?2:1,np=String(r.source||'').includes('OFFICIAL')?3:String(r.source||'').includes('FANTACALCIO')?2:1;if(!old){NEWS[key]=r;changed++;continue}if(r.status===old.status&&op>np){NEWS[key]={...old,lastVerifiedAt:r.updatedAt};changed++;continue}if(ts(r.updatedAt)>=ts(old.updatedAt)||np>op){NEWS[key]=r;changed++}}saveNews();return changed}
+function newsFor(key){return NEWS[key]||null}
+function freshLabel(){const x=localStorage.getItem(CHECK_KEY);if(!x)return 'mai';const d=new Date(x);if(!Number.isFinite(d.getTime()))return 'mai';return d.toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+
+// I dati NEWS sovrascrivono gli snapshot di giornata solo se più recenti.
+const OLD_GET=window.getMatchInput;
+if(typeof OLD_GET==='function'){
+ window.getMatchInput=getMatchInput=function(team,key){
+   const base=OLD_GET(team,key)||{};const n=newsFor(key);if(!n)return base;
+   const baseTs=ts(base.updatedAt);if(baseTs>ts(n.updatedAt)&&String(base.srcStatus||'').toUpperCase()==='MANUAL')return base;
+   const v={...base,liveNews:n,newsSeverity:n.severity||''};
+   if(n.status)v.status=n.status;
+   if(n.status==='out'){v.starter=0;v.vote=0;v.confStarter=99;v.confVote=99}
+   else if(n.status==='doubt'){v.starter=Math.min(+v.starter||50,45);v.vote=Math.min(+v.vote||70,70)}
+   if(Number.isFinite(+n.starter))v.starter=+n.starter;if(Number.isFinite(+n.vote))v.vote=+n.vote;
+   v.srcStatus=n.source||'NEWS';v.source=n.source||'NEWS';v.updatedAt=n.updatedAt||v.updatedAt;
+   v.fieldMeta={...(v.fieldMeta||{}),status:{source:n.source||'NEWS',provider:n.source||'NEWS',updatedAt:n.updatedAt,observations:[{source:n.source||'NEWS',status:n.status,updatedAt:n.updatedAt,note:n.note||''}]}};
+   return v;
+ }
+}
+
+// Infortunio lungo: riduce il valore negoziale corrente e aumenta la cedibilità.
+function installRiskWeights(){
+ const v13=window.MAXGM_V13;if(v13&&!v13.__v164){
+   const om=v13.perceivedMarketValue,oe=v13.playerExpendability;
+   v13.perceivedMarketValue=function(team,rec){let x=om(team,rec);const n=newsFor(rec?.key);if(n?.status==='out')x*=n.severity==='long'?.50:.72;else if(n?.status==='doubt')x*=.88;return Math.max(0,Math.min(100,x))};
+   v13.playerExpendability=function(team,rec){let x=oe(team,rec);const n=newsFor(rec?.key);if(n?.status==='out')x+=n.severity==='long'?24:13;else if(n?.status==='doubt')x+=5;return Math.max(0,Math.min(45,x))};v13.__v164=true;
+ }
+ const v143=window.MAXGM_V143;if(v143&&!v143.__v164){const of=v143.futureProjection;v143.futureProjection=function(p){let x=of(p),n=newsFor(p?.stable_key);if(n?.status==='out'&&n.severity==='long')x*=.62;else if(n?.status==='out')x*=.82;return x};v143.__v164=true}
+}
+
+function teamGks(team){return roster(team).filter(r=>roles(r.p).has('P')).map(r=>{const m=getMatchInput(team,r.key),st=String(m.status||'ok').toLowerCase(),starter=+m.starter||0,vote=+m.vote||0,n=newsFor(r.key);const reliable=st!=='out'&&(starter>=45||vote>=65||baseRating(r.p)>=78);return {r,m,st,starter,vote,n,reliable}})}
+function keeperRisk(team){const all=teamGks(team),outs=all.filter(x=>x.st==='out'),usable=all.filter(x=>x.reliable);let level='ok';if(outs.some(x=>x.n?.severity==='long')&&usable.length<=1)level='critical';else if(usable.length<=1)level='critical';else if(outs.length)level='high';return {team,all,outs,usable,level,critical:level==='critical'}}
+function currentHomeTeam(){return $('homeTeam')?.value||$('marketTeam')?.value||DEFAULT_TEAM}
+function currentMarketTeam(){return $('marketTeam')?.value||$('homeTeam')?.value||DEFAULT_TEAM}
+
+function riskHtml(r,where){
+ const last=freshLabel(),outNames=r.outs.map(x=>x.r.p.name).join(', ')||'—',usable=r.usable.map(x=>x.r.p.name).join(', ')||'nessuno';
+ if(r.level==='ok')return `<div class="v164-alert good"><div><div class="v164-kicker">NEWS → RISCHIO ROSA</div><h3>Portieri sotto controllo</h3><p>${esc(r.team)} · portieri utilizzabili: <b>${esc(usable)}</b>.</p><div class="v164-newsmeta"><span class="v164-pill good">NESSUNA EMERGENZA</span><span class="v164-pill">News: ${esc(last)}</span></div></div><div class="v164-alert-actions"><button class="action secondary v164-refresh-news">AGGIORNA NEWS</button></div></div>`;
+ return `<div class="v164-alert ${r.critical?'critical':''}"><div><div class="v164-kicker">${r.critical?'EMERGENZA PORTIERE':'RISCHIO PORTIERE'}</div><h3>${r.critical?'Serve una soluzione di mercato adesso':'Indisponibilità nel reparto portieri'}</h3><p>${esc(r.team)} · OUT: <b>${esc(outNames)}</b> · realmente utilizzabili: <b>${esc(usable)}</b>. MAX GM alza automaticamente la priorità del portiere e cerca scambi singoli o multipli.</p><div class="v164-newsmeta"><span class="v164-pill bad">PRIORITÀ ${r.critical?'CRITICA':'ALTA'}</span><span class="v164-pill gold">Fonte: ${esc(r.outs[0]?.n?.source||r.outs[0]?.m?.srcStatus||'dati rosa')}</span><span class="v164-pill">News: ${esc(last)}</span></div></div><div class="v164-alert-actions">${where==='market'?'<button class="action v164-find-gk">TROVA SOLUZIONE PORTIERE</button>':'<button class="action v164-go-market">CERCA SCAMBI</button>'}<button class="action secondary v164-refresh-news">AGGIORNA NEWS</button></div></div>`
+}
+function ensureAlerts(){
+ const dash=$('dashboard'),market=$('market');if(dash){let x=$('v164DashAlert');if(!x){x=document.createElement('div');x.id='v164DashAlert';dash.insertBefore(x,dash.children[1]||null)}x.innerHTML=riskHtml(keeperRisk(currentHomeTeam()),'dash')}
+ if(market){let x=$('v164MarketAlert');if(!x){x=document.createElement('div');x.id='v164MarketAlert';market.insertBefore(x,market.children[1]||null)}x.innerHTML=riskHtml(keeperRisk(currentMarketTeam()),'market')}
+ document.querySelectorAll('.v164-refresh-news').forEach(b=>b.onclick=()=>refreshNews(false));document.querySelectorAll('.v164-go-market').forEach(b=>b.onclick=()=>{document.querySelector('[data-view="market"]')?.click();setTimeout(()=>ensureAlerts(),120)});document.querySelectorAll('.v164-find-gk').forEach(b=>b.onclick=()=>findKeeperSolutions164(currentMarketTeam()));
+}
+
+function fmtSigned(x){x=Number(x)||0;return `${x>=0?'+':''}${x.toFixed(1)}`}
+function canReceiveGk(tb,r){const m=getMatchInput(tb,r.key);return String(m.status||'ok').toLowerCase()!=='out'&&((+m.starter||0)>=35||(+m.vote||0)>=55||baseRating(r.p)>=72)}
+function emergencyCandidates(team){
+ const risk=keeperRisk(team),inj=risk.outs.find(x=>x.n?.severity==='long')?.r||risk.outs[0]?.r;if(!inj)return [];
+ const all=[];
+ for(const tb of TEAM_NAMES){if(tb===team)continue;const theirs=roster(tb).filter(r=>roles(r.p).has('P')&&canReceiveGk(tb,r));if(!theirs.length)continue;
+   for(const gk of theirs){
+     let ev=window.MAXGM_V15?.evaluateMulti?.(team,tb,[inj.key],[gk.key]);if(ev?.valid&&ev.legalA&&ev.legalB&&ev.gkBalanced&&ev.xiNowDelta>0.15&&ev.realism>=42&&ev.marketParity>=22&&ev.oppBenefit>=-1.15){ev.v164Type='1';all.push(ev)}
+   }
+   // Il motore mirato sa già creare pacchetti con Grabara obbligatorio e un P in entrata.
+   for(const n of [2,3]){const xs=window.MAXGM_V15?.suggestTargeted?.(team,inj.key,tb,n,3)||[];for(const ev of xs){if(ev.ins.some(r=>roles(r.p).has('P'))&&ev.outs.some(r=>r.key===inj.key)){ev.v164Type=String(n);all.push(ev)}}}
+ }
+ const seen=new Set();return all.filter(x=>{const s=x.tb+'|'+x.outs.map(r=>r.key).sort().join(',')+'|'+x.ins.map(r=>r.key).sort().join(',');if(seen.has(s))return false;seen.add(s);return true}).sort((a,b)=>{const ap=a.validAuto?8:0,bp=b.validAuto?8:0;return (b.score+bp+b.xiNowDelta*5)-(a.score+ap+a.xiNowDelta*5)}).slice(0,8)
+}
+function gkCard(ev,i){const outs=ev.outs.map(r=>r.p.name).join(' + '),ins=ev.ins.map(r=>r.p.name).join(' + '),fmt=`${ev.n} VS ${ev.n}`,strict=ev.validAuto;return `<div class="v164-gk-card"><div class="v164-gk-head"><div><div class="v164-kicker">${i===0?'SOLUZIONE PORTIERE PREFERITA':'ALTERNATIVA'}</div><div class="v164-gk-trade">${esc(outs)} <span style="color:#f1c75b">→</span> ${esc(ins)}</div><div class="tiny muted">con ${esc(ev.tb)}</div></div><div class="v164-gk-score">${Math.round(ev.score)}<small>QUALITÀ /100</small></div></div><div class="v164-gk-tags"><span class="v164-pill gold">${fmt}</span><span class="v164-pill good">XI ${fmtSigned(ev.xiNowDelta)}</span><span class="v164-pill ${strict?'good':'gold'}">${strict?'VALIDATA':'TRATTATIVA'}</span><span class="v164-pill">Realismo ${Math.round(ev.realism)}%</span></div><div class="v164-gk-reason">Obiettivo prioritario: uscire dall’emergenza portiere senza peggiorare in modo critico la struttura della rosa. La proposta resta filtrata anche dal beneficio per la controparte e dalla parità di mercato.</div><div class="market-card-actions"><button class="action secondary v164-eval" data-team="${encodeURIComponent(ev.tb)}" data-n="${ev.n}" data-out="${ev.outs.map(r=>r.key).join(',')}" data-in="${ev.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
+function wireEval(root,team){root.querySelectorAll('.v164-eval').forEach(b=>b.onclick=()=>{const tb=decodeURIComponent(b.dataset.team),n=+b.dataset.n,outs=b.dataset.out.split(','),ins=b.dataset.in.split(',');document.querySelector('[data-view="trade"]')?.click();setTimeout(()=>{if(n===1){$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=outs[0];$('tradePlayerB').value=ins[0];analyzeTrade()}else{window.MAXGM_V15?.setMultiForm?.(team,tb,n,outs,ins);$('v15Evaluate')?.click()}},150)})}
+function findKeeperSolutions164(team){
+ const market=$('market'),out=$('marketOutput'),st=$('marketStatus');if(!out)return;const r=keeperRisk(team);if(!r.outs.length){out.innerHTML='<div class="smart-empty"><b>Nessun portiere OUT rilevato.</b><br>Il reparto non richiede uno scambio d’emergenza.</div>';return}
+ if(st)st.textContent='Analizzo tutte le rose per risolvere l’emergenza portiere…';out.innerHTML='<div class="smart-empty">Cerco 1vs1, 2vs2 e 3vs3 con un portiere utilizzabile in entrata…</div>';
+ setTimeout(()=>{installRiskWeights();const t0=performance.now(),xs=emergencyCandidates(team),ms=performance.now()-t0;if(!xs.length){out.innerHTML='<div class="smart-empty"><b>NESSUNA SOLUZIONE ABBASTANZA SOLIDA.</b><br><br>MAX GM non forza uno scambio solo per prendere un portiere: prova con la gestione mirata verso una squadra specifica o con un aggiornamento delle rose/news.</div>';if(st)st.textContent=`Emergenza portiere · 0 proposte valide · ${ms.toFixed(0)} ms`;return}out.innerHTML=`<div class="v164-gk-results">${xs.map((x,i)=>gkCard(x,i)).join('')}</div>`;wireEval(out,team);if(st)st.textContent=`Emergenza portiere · ${xs.length} soluzioni tra 1vs1 / 2vs2 / 3vs3 · ${ms.toFixed(0)} ms`},40)
+}
+
+async function refreshNews(silent=true){
+ mergeNews(Object.values(EMBEDDED));localStorage.setItem(CHECK_KEY,new Date().toISOString());installRiskWeights();
+ const cfg=typeof syncConfig16==='function'?syncConfig16():{};
+ if(cfg?.url&&cfg?.token){try{const base=String(cfg.url).replace(/\/$/,'');const res=await fetch(base+'/api/news',{headers:{Authorization:'Bearer '+cfg.token},cache:'no-store'});if(!res.ok)throw new Error('HTTP '+res.status);const j=await res.json();if(!j.ok||!Array.isArray(j.players))throw new Error(j.error||'NEWS_INVALID');mergeNews(j.players);localStorage.setItem(CHECK_KEY,j.fetchedAt||new Date().toISOString())}catch(e){if(!silent)alert('News live non raggiungibili. Mantengo gli ultimi dati verificati salvati.')}}
+ installRiskWeights();ensureAlerts();try{renderDashboard();renderMarket16?.()}catch(e){}
+}
+function installLiveStatus(){const live=$('live');if(!live||$('v164LiveBox'))return;const box=document.createElement('div');box.id='v164LiveBox';box.className='v164-livebox';box.innerHTML=`<div class="v164-live-row"><div><div class="v164-kicker">NEWS LIVE</div><h3>Indisponibilità che cambiano le decisioni</h3><div class="v164-live-state" id="v164LiveState"></div></div><button class="action secondary" id="v164LiveRefresh">AGGIORNA NEWS</button></div>`;live.insertBefore(box,live.children[1]||null);$('v164LiveRefresh').onclick=()=>refreshNews(false);renderLiveState()}
+function renderLiveState(){const el=$('v164LiveState');if(!el)return;const injured=Object.values(NEWS).filter(x=>x.status==='out').length,cfg=typeof syncConfig16==='function'?syncConfig16():{};el.innerHTML=`Ultimo controllo: <b>${esc(freshLabel())}</b> · indisponibilità memorizzate: <b>${injured}</b> · sync automatico: <b>${cfg?.url&&cfg?.token?'ATTIVO (apertura + 30 min)':'DA COLLEGARE'}</b>`}
+function brand(){const v=document.querySelector('.version');if(v&&v.textContent!==BADGE)v.textContent=BADGE;if(document.title!==TITLE)document.title=TITLE;const f=$('appFooter');if(f)f.textContent=`MAX GM ${V} · News → rischio rosa → decisione · Rose dinamiche · Scambi 1/2/3 vs 1/2/3`}
+function hook(){
+ brand();installRiskWeights();mergeNews(Object.values(EMBEDDED));localStorage.setItem(CHECK_KEY,localStorage.getItem(CHECK_KEY)||'2026-09-20T22:57:00+02:00');ensureAlerts();installLiveStatus();renderLiveState();
+ for(const id of ['homeTeam','marketTeam'])$(id)?.addEventListener('change',()=>setTimeout(ensureAlerts,40));
+ $('globalLeague')?.addEventListener('change',()=>setTimeout(()=>{brand();ensureAlerts();renderLiveState()},500));
+ document.addEventListener('click',e=>{if(e.target.closest('[data-view="market"],[data-view="dashboard"],[data-view="live"]'))setTimeout(()=>{brand();ensureAlerts();installLiveStatus();renderLiveState()},180)});
+ const ver=document.querySelector('.version');if(ver)new MutationObserver(()=>brand()).observe(ver,{childList:true,subtree:true});
+ refreshNews(true);setInterval(()=>refreshNews(true),30*60*1000);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',hook);else hook();
+window.MAXGM_V164={version:V,newsFor,keeperRisk,refreshNews,findKeeperSolutions:findKeeperSolutions164,emergencyCandidates};
+})();
+</script>
+
 </body></html>
