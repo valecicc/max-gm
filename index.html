@@ -2739,10 +2739,97 @@ function matchTeam161(name){const n=norm161(name);return Object.keys(LEAGUES[act
 function playerIndex161(){const m=new Map();for(const [k,p] of Object.entries(PLAYER_DB)){const n=norm161(p.name);if(!m.has(n))m.set(n,[]);m.get(n).push(k)}return m}
 const P161=playerIndex161();
 function normalizeImport161(rows){const next={};for(const t of Object.keys(LEAGUES[activeLeague].rosters))next[t]=[];const badTeams=[],badPlayers=[],dup=[],seen=new Set();for(const x of rows){const t=matchTeam161(x.team);if(!t){badTeams.push(x.team);continue}const ks=P161.get(norm161(x.name))||[];if(ks.length!==1){badPlayers.push(x.name);continue}const k=ks[0];if(seen.has(k)){dup.push(x.name);continue}seen.add(k);let old=null;for(const rs of Object.values(LEAGUES[activeLeague].rosters)){old=rs.find(r=>r.key===k);if(old)break}next[t].push({key:k,price:Number.isFinite(+x.acquisitionCost)&&+x.acquisitionCost>0?+x.acquisitionCost:(old?.price||0)})}return {next,badTeams:[...new Set(badTeams)],badPlayers:[...new Set(badPlayers)],dup:[...new Set(dup)],count:rows.length}}
+// ---------- Import rose Excel / XLSX / XLS ----------
+const XLSX_CDN161='https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+let xlsxLoader161=null;
+function ensureXlsx161(){
+ if(window.XLSX?.read&&window.XLSX?.utils?.sheet_to_json)return Promise.resolve(window.XLSX);
+ if(xlsxLoader161)return xlsxLoader161;
+ xlsxLoader161=new Promise((resolve,reject)=>{
+   const old=document.querySelector('script[data-maxgm-xlsx]');
+   if(old){old.addEventListener('load',()=>window.XLSX?resolve(window.XLSX):reject(new Error('Libreria Excel non disponibile.')),{once:true});old.addEventListener('error',()=>reject(new Error('Impossibile caricare il lettore Excel. Controlla la connessione internet.')),{once:true});return}
+   const sc=document.createElement('script');sc.src=XLSX_CDN161;sc.async=true;sc.dataset.maxgmXlsx='1';
+   const tm=setTimeout(()=>reject(new Error('Timeout nel caricamento del lettore Excel. Riprova con connessione internet attiva.')),15000);
+   sc.onload=()=>{clearTimeout(tm);window.XLSX?resolve(window.XLSX):reject(new Error('Libreria Excel caricata ma non inizializzata.'))};
+   sc.onerror=()=>{clearTimeout(tm);reject(new Error('Impossibile caricare il lettore Excel. Controlla la connessione internet.'))};
+   document.head.appendChild(sc)
+ });
+ return xlsxLoader161;
+}
+function headerMap161(row){
+ const H=(row||[]).map(norm161),idx=names=>{for(const n of names){const i=H.indexOf(norm161(n));if(i>=0)return i}return -1};
+ return {
+  team:idx(['squadra','team','fantasy team','fantasyteam','fantasquadra','nome squadra','team name','squadra fantasy']),
+  player:idx(['giocatore','player','calciatore','nome giocatore','nome calciatore','player name','atleta','nome']),
+  cost:idx(['costo','prezzo','acquisition cost','acquisitioncost','costo acquisto','prezzo acquisto','crediti','spesa','costo asta','prezzo asta'])
+ };
+}
+function rowsFromWorkbook161(wb,XLSX){
+ const out=[];
+ const add=(team,name,cost=0)=>{team=String(team??'').trim();name=String(name??'').trim();if(!team||!name)return;out.push({team,name,acquisitionCost:Number(String(cost??0).replace(',','.'))||0})};
+ for(const sheetName of wb.SheetNames||[]){
+  const ws=wb.Sheets[sheetName];if(!ws)continue;
+  const matrix=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:false});if(!matrix.length)continue;
+  const sheetTeam=matchTeam161(sheetName);let parsed=false;
+  // Formato tabellare classico: individua l'intestazione nelle prime 15 righe.
+  for(let h=0;h<Math.min(15,matrix.length);h++){
+   const M=headerMap161(matrix[h]);if(M.player<0)continue;if(M.team<0&&!sheetTeam)continue;
+   for(let r=h+1;r<matrix.length;r++){
+    const row=matrix[r]||[],team=M.team>=0?row[M.team]:sheetTeam,name=row[M.player];
+    if(String(team??'').trim()&&String(name??'').trim())add(team,name,M.cost>=0?row[M.cost]:0)
+   }
+   parsed=true;break
+  }
+  if(parsed)continue;
+  // Formato a sezioni: una riga con il nome squadra, seguita dai giocatori.
+  let currentTeam=sheetTeam;
+  for(const row of matrix){
+   const vals=(row||[]).map(v=>String(v??'').trim()).filter(Boolean);if(!vals.length)continue;
+   for(const v of vals){const t=matchTeam161(v);if(t){currentTeam=t;break}}
+   if(!currentTeam)continue;
+   let found=null;
+   for(const v of vals){const ks=P161.get(norm161(v))||[];if(ks.length===1){found={name:v,key:ks[0]};break}}
+   if(found)add(currentTeam,found.name,0)
+  }
+ }
+ if(!out.length)throw new Error('Nessuna rosa riconosciuta nel file Excel. Usa colonne Squadra/Giocatore oppure un foglio per squadra.');
+ return out;
+}
+async function rowsFromExcel161(file){
+ const XLSX=await ensureXlsx161(),buf=await file.arrayBuffer();
+ let wb;try{wb=XLSX.read(buf,{type:'array',cellDates:false,cellText:true})}catch(e){throw new Error('File Excel non leggibile o danneggiato. '+(e?.message||''))}
+ return rowsFromWorkbook161(wb,XLSX)
+}
+
 let pendingImport161=null;
-async function previewImport161(file){try{const text=await file.text();let rows=[];if(file.name.toLowerCase().endsWith('.json')){const j=JSON.parse(text);if(Array.isArray(j))rows=j;else if(Array.isArray(j.rosters))rows=j.rosters.map(x=>({team:x.team||x.teamName||x.fantasyTeamName,name:x.name||x.playerName,acquisitionCost:x.acquisitionCost??x.cost??x.price??0}));else throw new Error('JSON non riconosciuto. Usa un array di righe o il formato MAX GM.')}else rows=rowsFromCsv161(text);const z=normalizeImport161(rows),teams=Object.values(z.next).filter(a=>a.length).length,expected=Object.keys(z.next).length;if(z.badTeams.length||z.badPlayers.length||z.dup.length||teams!==expected){pendingImport161=null;setStatus161(`<b>IMPORT BLOCCATO PER SICUREZZA.</b><br>${z.badTeams.length?`Squadre non riconosciute: ${z.badTeams.slice(0,6).join(', ')}.<br>`:''}${z.badPlayers.length?`Giocatori non riconosciuti: ${z.badPlayers.slice(0,8).join(', ')}.<br>`:''}${z.dup.length?`Duplicati: ${z.dup.slice(0,6).join(', ')}.<br>`:''}Letti ${z.count} giocatori in ${teams}/${expected} squadre. Nessuna rosa modificata.`,'bad');return}const oldMap=new Map();for(const [t,a] of Object.entries(LEAGUES[activeLeague].rosters))for(const r of a)oldMap.set(r.key,t);const changes=[];for(const [t,a] of Object.entries(z.next))for(const r of a){const from=oldMap.get(r.key);if(from&&from!==t)changes.push(`${playerName161(r.key)}: ${from} → ${t}`)}pendingImport161=z.next;setStatus161(`<b>File letto correttamente.</b> ${z.count} giocatori · ${changes.length} movimenti rilevati.${changes.length?'<br>'+changes.slice(0,10).join('<br>')+(changes.length>10?`<br>+ ${changes.length-10} altri`:''):'<br>Nessuna variazione di squadra.'}<div class="v161-manager-actions"><button class="action" id="v161ApplyImport">APPLICA FILE</button></div>`,'good');setTimeout(()=>{$161('v161ApplyImport').onclick=applyImport161},0)}catch(e){pendingImport161=null;setStatus161(`<b>File non importato.</b> ${String(e.message||e)}`,'bad')}}
+async function previewImport161(file){
+ try{
+  const name=(file.name||'').toLowerCase();let rows=[],source='file';
+  setStatus161('<b>Analisi file in corso…</b> MAX GM non modificherà nessuna rosa finché non confermi.','');
+  if(name.endsWith('.json')){
+   source='JSON';const text=await file.text(),j=JSON.parse(text);
+   if(Array.isArray(j))rows=j;
+   else if(Array.isArray(j.rosters))rows=j.rosters.map(x=>({team:x.team||x.teamName||x.fantasyTeamName,name:x.name||x.playerName,acquisitionCost:x.acquisitionCost??x.cost??x.price??0}));
+   else throw new Error('JSON non riconosciuto. Usa un array di righe o il formato MAX GM.');
+  }else if(name.endsWith('.xlsx')||name.endsWith('.xls')){
+   source=name.endsWith('.xlsx')?'XLSX':'XLS';rows=await rowsFromExcel161(file);
+  }else if(name.endsWith('.csv')){
+   source='CSV';rows=rowsFromCsv161(await file.text());
+  }else throw new Error('Formato non supportato. Usa XLSX, XLS, CSV o JSON.');
+  const z=normalizeImport161(rows),teams=Object.values(z.next).filter(a=>a.length).length,expected=Object.keys(z.next).length;
+  if(z.badTeams.length||z.badPlayers.length||z.dup.length||teams!==expected){
+   pendingImport161=null;
+   setStatus161(`<b>IMPORT ${source} BLOCCATO PER SICUREZZA.</b><br>${z.badTeams.length?`Squadre non riconosciute: ${z.badTeams.slice(0,8).join(', ')}${z.badTeams.length>8?'…':''}.<br>`:''}${z.badPlayers.length?`Giocatori non riconosciuti: ${z.badPlayers.slice(0,10).join(', ')}${z.badPlayers.length>10?'…':''}.<br>`:''}${z.dup.length?`Duplicati: ${z.dup.slice(0,8).join(', ')}${z.dup.length>8?'…':''}.<br>`:''}Letti ${z.count} giocatori in ${teams}/${expected} squadre. Nessuna rosa modificata.<br><span class="tiny muted">Controlla di aver selezionato il file della lega attualmente attiva e che i nomi squadra corrispondano.</span>`,'bad');return
+  }
+  const oldMap=new Map();for(const [t,a] of Object.entries(LEAGUES[activeLeague].rosters))for(const r of a)oldMap.set(r.key,t);
+  const changes=[];for(const [t,a] of Object.entries(z.next))for(const r of a){const from=oldMap.get(r.key);if(from&&from!==t)changes.push(`${playerName161(r.key)}: ${from} → ${t}`)}
+  pendingImport161=z.next;
+  setStatus161(`<b>${source} letto correttamente.</b> ${z.count} giocatori · ${teams} squadre · <b>${changes.length} movimenti rilevati</b>.${changes.length?'<br>'+changes.slice(0,12).join('<br>')+(changes.length>12?`<br>+ ${changes.length-12} altri`:''):'<br>Nessuna variazione di squadra.'}<div class="v161-manager-actions"><button class="action" id="v161ApplyImport">APPLICA FILE</button></div><div class="tiny muted" style="margin-top:7px">Il file non viene applicato finché non premi APPLICA FILE. L’operazione resta annullabile dallo storico.</div>`,'good');
+  setTimeout(()=>{$161('v161ApplyImport').onclick=applyImport161},0)
+ }catch(e){pendingImport161=null;setStatus161(`<b>File non importato.</b> ${String(e.message||e)}`,'bad')}
+}
 function applyImport161(){if(!pendingImport161)return;const before=clone161(LEAGUES[activeLeague].rosters);pushHistory161(before,{source:'Import file',label:'Aggiornamento rose da file'});saveRosters161(pendingImport161,{source:'Import file'});pendingImport161=null;refresh161();setStatus161('<b>File applicato.</b> Tutte le sezioni di MAX GM usano ora le rose importate.','good')}
-function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.6.6 · DINAMICHE</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".csv,.json,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">CSV: colonne minime <b>Squadra</b> e <b>Giocatore</b>; opzionale <b>Costo</b>. Prima dell’applicazione MAX GM mostra errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
+function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.7.0 · XLSX / CSV / JSON</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file Excel / XLSX / XLS / CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">Excel/CSV: colonne consigliate <b>Squadra</b>, <b>Giocatore</b> e facoltativa <b>Costo</b>. Sono riconosciuti anche sinonimi comuni (Team, Fantasquadra, Calciatore, Player, Prezzo, Crediti). Se ogni squadra è in un foglio separato, MAX GM può usare il nome del foglio come squadra. Prima dell’applicazione mostra sempre errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file Excel, XLSX, XLS, CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
 function refreshTarget161(){const team=$161('marketTeam')?.value||DEFAULT_TEAM,p=$161('v16MarketPlayer'),o=$161('v16MarketOpponent');if(p){const keep=p.value;p.innerHTML='<option value="">QUALSIASI GIOCATORE</option>'+roster(team).slice().sort((a,b)=>baseRating(b.p)-baseRating(a.p)).map(r=>`<option value="${r.key}">${r.p.name} · ${r.p.role}</option>`).join('');if([...p.options].some(x=>x.value===keep))p.value=keep}if(o){const keep=o.value;o.innerHTML='<option value="">QUALSIASI SQUADRA</option>'+TEAM_NAMES.filter(t=>t!==team).map(t=>`<option value="${encodeURIComponent(t)}">${t}</option>`).join('');if([...o.options].some(x=>x.value===keep))o.value=keep}}
 function injectDone161(){const root=$161('marketOutput');if(!root)return;root.querySelectorAll('[data-v16-team],[data-v15-team]').forEach(b=>{if(b.parentElement?.querySelector('.v161-done'))return;const d=document.createElement('button');d.className='action secondary v161-done';d.textContent='SCAMBIO CONCLUSO';for(const k of ['team','n','out','in']){const v=b.dataset['v16'+k.charAt(0).toUpperCase()+k.slice(1)]??b.dataset['v15'+k.charAt(0).toUpperCase()+k.slice(1)];if(v!=null)d.dataset[k]=v}b.insertAdjacentElement('afterend',d)})}
 function wireDone161(){document.addEventListener('click',e=>{const b=e.target.closest('.v161-done');if(!b)return;const team=$161('marketTeam')?.value||DEFAULT_TEAM,tb=decodeURIComponent(b.dataset.team||''),outs=(b.dataset.out||'').split(',').filter(Boolean),ins=(b.dataset.in||'').split(',').filter(Boolean);if(!tb||!outs.length||outs.length!==ins.length){alert('Dati dello scambio incompleti.');return}if(!confirm(`Segnare come CONCLUSO ${outs.map(playerName161).join(' + ')} ⇄ ${ins.map(playerName161).join(' + ')} con ${tb}?`))return;const r=applyTrade161(team,tb,outs,ins,'Scambio concluso da MAX GM');alert(r.ok?'Rose aggiornate in tutto MAX GM.':r.error)})}
@@ -2783,7 +2870,7 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
 <script id="maxgm-v164-news-risk">
 (function(){
 'use strict';
-const V='V1.6.9', BADGE='V1.6.9 · RECIPROCAL NEEDS+', TITLE='MAX GM V1.6.9 — Reciprocal Needs + Min Sacrifice';
+const V='V1.7.0', BADGE='V1.7.0 · EXCEL ROSTERS + RECIPROCAL NEEDS', TITLE='MAX GM V1.7.0 — Excel Roster Import + Reciprocal Needs';
 const $=id=>document.getElementById(id);
 const NEWS_KEY='maxgm-v164:news-cache', CHECK_KEY='maxgm-v164:last-news-check';
 const EMBEDDED={

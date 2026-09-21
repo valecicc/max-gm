@@ -1,8 +1,8 @@
 {
-  "name": "MAX GM V1.6.9",
+  "name": "MAX GM V1.7.0",
   "short_name": "MAX GM",
-  "description": "MAX GM — Motore bisogni reciproci con minimo sacrificio, surplus controparte, news aware, emergenza portiere, rose dinamiche e scambi 1vs1/2vs2/3vs3.",
-  "start_url": "./?app=1.6.9",
+  "description": "MAX GM — import rose Excel/XLSX/XLS/CSV/JSON, bisogni reciproci, minimo sacrificio, news aware, emergenza portiere e scambi 1vs1/2vs2/3vs3.",
+  "start_url": "./?app=1.7.0",
   "scope": "./",
   "display": "standalone",
   "background_color": "#07111f",
