@@ -544,6 +544,21 @@ function needForPlayer(teamArr,p){
  }
  return detail||{group:'—',health:100,need:0};
 }
+// V1.6.7 — misura quanto uno scambio chiude davvero le carenze di ruolo della rosa.
+// Non guarda solo il ruolo del singolo giocatore: confronta la struttura PRIMA e DOPO il pacchetto.
+function needImpact(beforeStruct,afterStruct){
+ let positive=0,negative=0,bestGroup='—',bestClosure=0,bestBefore=100,bestAfter=100,totalDelta=0;
+ for(const [g,gd] of Object.entries(GROUPS)){
+  const bef=Number(beforeStruct?.groups?.[g]?.score||0),aft=Number(afterStruct?.groups?.[g]?.score||0),delta=aft-bef;
+  const deficit=clamp(88-bef,0,45),closure=Math.min(deficit,Math.max(0,delta)),hurt=Math.max(0,-delta),w=Number(gd.w||1);
+  positive+=closure*(1+deficit/35)*w;
+  negative+=hurt*(1+Math.max(0,70-bef)/30)*w;
+  totalDelta+=delta*w;
+  if(closure>bestClosure){bestClosure=closure;bestGroup=g;bestBefore=bef;bestAfter=aft}
+ }
+ const net=positive-negative*.75,score=clamp(50+net*2.1,0,100);
+ return {score,net,positive,negative,bestGroup,bestClosure,bestBefore,bestAfter,totalDelta};
+}
 function teamSummary(t){
  const arr=roster(t), st=structure(arr), xi=bestLineup(arr);
  return {arr,st,xi,total:arr.reduce((s,x)=>s+x.price,0)};
@@ -636,16 +651,17 @@ function analyzeTrade(){
  const structDelta=a1.score-a0.score;
  const oppXi=(bx1.best?.score||0)-(bx0.best?.score||0);
  const oppStruct=b1.score-b0.score;
- const needOut=needForPlayer(B,a.p),needIn=needForPlayer(A,b.p);
- const leverage=Math.max(0,oppXi*.55+oppStruct*2+needOut.need*.35);
+ const needOut=needForPlayer(B,a.p),needIn=needForPlayer(A,b.p),oppNeedImpact=needImpact(b0,b1),ourNeedImpact=needImpact(a0,a1);
+ const leverage=Math.max(0,oppXi*.35+oppStruct*1.4+needOut.need*.18+oppNeedImpact.net*.85+oppNeedImpact.bestClosure*.45);
  const weeklyOut=tradeWeeklyPulse(ta,a),weeklyIn=tradeWeeklyPulse(tb,b),weeklyDelta=weeklyIn-weeklyOut;
- const gmScore=playerDelta*.45+xiDelta*.9+structDelta*3-leverage*.28+weeklyDelta*.22;
+ const gmScore=playerDelta*.45+xiDelta*.9+structDelta*3-leverage*.20+weeklyDelta*.22+ourNeedImpact.net*.10;
  let verdict,cls,explain;
  if(gmScore>=6){verdict='ACCETTA';cls='good';explain='Lo scambio migliora il tuo valore complessivo e non regala troppo vantaggio strutturale all’avversario.'}
  else if(gmScore>=-3){verdict='TRATTA';cls='warn';explain='Scambio vicino all’equilibrio: prova a ottenere un piccolo premio o una seconda pedina.'}
  else{verdict='RIFIUTA';cls='bad';explain='Il valore che cedi supera quello che ricevi, considerando anche XI, profondità e bisogno dell’avversario.'}
- const leverageText=leverage>=10?`Leva alta: ${tb} ha bisogno soprattutto di <b>${needOut.group}</b> (salute ${fmt(needOut.health,1)}). Il tuo ${a.p.name} vale per loro più del suo valore neutro.`:leverage>=5?`Leva media: ${a.p.name} copre un bisogno reale di ${tb}. Non regalarlo alla pari.`:`Leva contenuta: il bisogno specifico dell’avversario non cambia molto il prezzo.`;
- const e0=a0.groups.E.score,e1=a1.groups.E.score,oe0=b0.groups.E.score,oe1=b1.groups.E.score;
+ const leverageText=oppNeedImpact.bestClosure>=2?`Leva concreta: ${a.p.name} risolve un bisogno di <b>${oppNeedImpact.bestGroup}</b> per ${tb} (${fmt(oppNeedImpact.bestBefore,1)} → ${fmt(oppNeedImpact.bestAfter,1)}). MAX GM considera questo beneficio nel realismo della trattativa e nel prezzo che puoi chiedere.`:leverage>=5?`Leva media: ${a.p.name} copre un bisogno reale di ${tb}. Non regalarlo alla pari.`:`Leva contenuta: il bisogno specifico dell’avversario non cambia molto il prezzo.`;
+ const myGroup=ourNeedImpact.bestGroup!=='—'?ourNeedImpact.bestGroup:needIn.group,oppGroup=oppNeedImpact.bestGroup!=='—'?oppNeedImpact.bestGroup:needOut.group;
+ const my0=a0.groups[myGroup]?.score||0,my1=a1.groups[myGroup]?.score||0,opp0=b0.groups[oppGroup]?.score||0,opp1=b1.groups[oppGroup]?.score||0;
  tradeResult.innerHTML=`<div class="card">
   <div class="verdict ${cls}"><div class="tiny muted">VERDETTO MAX GM</div><div class="title">${verdict}</div><div>${a.p.name} → ${b.p.name}</div><div class="tiny" style="margin-top:5px">${explain}</div></div>
   <div class="metric-grid">
@@ -660,11 +676,12 @@ function analyzeTrade(){
    <div class="card" style="box-shadow:none"><h3>${ta}</h3>
     <div class="row"><span>${a.p.name} · ${a.p.role}</span><span><b>GM ${fmt(baseRating(a.p),1)}</b> <span class="pulse ${weeklyOut>1.2?'up':weeklyOut<-1.2?'down':'flat'}">${weeklyPulseLabel(weeklyOut)} ${signed(weeklyOut,1)}</span></span></div>
     <div class="row"><span>${b.p.name} · ${b.p.role}</span><span><b>GM ${fmt(baseRating(b.p),1)}</b> <span class="pulse ${weeklyIn>1.2?'up':weeklyIn<-1.2?'down':'flat'}">${weeklyPulseLabel(weeklyIn)} ${signed(weeklyIn,1)}</span></span></div>
-    <div class="roleline"><span>E health</span><span>${fmt(e0,1)} → <b>${fmt(e1,1)}</b></span></div>
+    <div class="roleline"><span>${myGroup} health</span><span>${fmt(my0,1)} → <b>${fmt(my1,1)}</b></span></div>
     <div class="roleline"><span>Modulo migliore</span><span>${ax0.best?.module} → <b>${ax1.best?.module}</b></span></div>
    </div>
    <div class="card" style="box-shadow:none"><h3>Leva negoziale</h3><div class="note">${leverageText}</div>
-    <div class="roleline"><span>${tb} · E health</span><span>${fmt(oe0,1)} → <b>${fmt(oe1,1)}</b></span></div>
+    <div class="roleline"><span>${tb} · ${oppGroup} health</span><span>${fmt(opp0,1)} → <b>${fmt(opp1,1)}</b></span></div>
+    <div class="roleline"><span>Bisogno controparte</span><span class="${oppNeedImpact.score>=65?'warn':''}"><b>${fmt(oppNeedImpact.score,0)}/100</b></span></div>
     <div class="roleline"><span>Structure avversario</span><span>${signed(oppStruct,1)}</span></div>
     <div class="roleline"><span>Need-adjusted leverage</span><span class="${leverage>=8?'warn':''}"><b>${fmt(leverage,1)}</b></span></div>
    </div>
@@ -1895,23 +1912,24 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  }
  function detailTrade(ta,tb,a,b){
    // V1.3.2 FAST: separa convenienza tecnica e realismo della controparte. L'analisi esatta resta nel pulsante "Valuta questo scambio".
-   const A=roster(ta),B=roster(tb),playerDelta=baseRating(b.p)-baseRating(a.p);
+   const A=roster(ta),B=roster(tb),A2=replacePlayer(A,a.key,b),B2=replacePlayer(B,b.key,a),playerDelta=baseRating(b.p)-baseRating(a.p);
    const needOut=bestNeed(tb,a.p),needIn=bestNeed(ta,b.p),ownSellNeed=bestNeed(ta,a.p),ownerNeed=bestNeed(tb,b.p);
+   const ourNeedImpact=needImpact(structure(A),structure(A2)),oppNeedImpact=needImpact(structure(B),structure(B2));
    const exp=playerExpendability(tb,b),balance=clamp13(100-Math.abs(playerDelta)*3.0,0,100);
    const costBalance=100*Math.sqrt((Math.min(a.price,b.price)+3)/(Math.max(a.price,b.price)+3));
    const marketGap=Math.log((b.price+5)/(a.price+5));
-   const interest=clamp13(35+needOut.need*1.55+(88-needOut.health)*.25,0,100);
-   const myFit=clamp13(35+needIn.need*1.55+Math.max(0,playerDelta)*1.3-ownSellNeed.need*.25,0,100);
-   const ourScore=playerDelta*.55+needIn.need*.20-ownSellNeed.need*.12+marketGap*1.4;
-   const oppScore=(-playerDelta)*.48+needOut.need*.24+exp*.22-ownerNeed.need*.10-Math.max(0,marketGap)*4+Math.max(0,-marketGap)*1.5;
+   const interest=clamp13(35+needOut.need*.90+(88-needOut.health)*.16+(oppNeedImpact.score-50)*.72,0,100);
+   const myFit=clamp13(35+needIn.need*1.20+Math.max(0,playerDelta)*1.3-ownSellNeed.need*.25+(ourNeedImpact.score-50)*.32,0,100);
+   const ourScore=playerDelta*.55+needIn.need*.16-ownSellNeed.need*.12+marketGap*1.4+ourNeedImpact.net*.22;
+   const oppScore=(-playerDelta)*.48+needOut.need*.16+exp*.22-ownerNeed.need*.08-Math.max(0,marketGap)*4+Math.max(0,-marketGap)*1.5+oppNeedImpact.net*.38;
    const mutual=clamp13(62+Math.min(10,ourScore)*2.2+Math.min(10,oppScore)*2.0-Math.abs(ourScore-oppScore)*1.15,0,100);
    const feasibility=clamp13(mutual*.35+interest*.25+exp*.15+balance*.10+costBalance*.15,0,100);
    const forUs=clamp13(50+ourScore*4,0,100);
    const marketIn=perceivedMarketValue(ta,a),marketOut=perceivedMarketValue(tb,b),perceivedFair=clamp13(50+(marketIn-marketOut)*2.15,0,100),oppBenefit=clamp13(50+oppScore*4,0,100);
-   const realism=clamp13(oppBenefit*.27+interest*.22+exp*.16+costBalance*.13+perceivedFair*.22,0,100);
-   const recommendation=clamp13(forUs*.46+realism*.34+interest*.12+myFit*.08,0,100);
+   const realism=clamp13(oppBenefit*.23+interest*.22+exp*.14+costBalance*.11+perceivedFair*.18+oppNeedImpact.score*.12,0,100);
+   const recommendation=clamp13(forUs*.44+realism*.34+interest*.10+myFit*.07+oppNeedImpact.score*.05,0,100);
    const fitDelta=clamp13(playerDelta*.14+needIn.need*.10-ownSellNeed.need*.06,-8,8);
-   return {ta,tb,a,b,playerDelta,xiDelta:fitDelta,structDelta:0,oppXi:0,oppStruct:0,ourScore,oppScore,needOut,needIn,leverage:needOut.need,weeklyDelta:0,exp,balance,costBalance,interest,myFit,feasibility,forUs,realism,perceivedFair,marketIn,marketOut,recommendation,fast:true};
+   return {ta,tb,a,b,playerDelta,xiDelta:fitDelta,structDelta:0,oppXi:0,oppStruct:0,ourScore,oppScore,needOut,needIn,leverage:needOut.need,weeklyDelta:0,exp,balance,costBalance,interest,myFit,feasibility,forUs,realism,perceivedFair,marketIn,marketOut,recommendation,ourNeedImpact,oppNeedImpact,oppNeedFit:oppNeedImpact.score,fast:true};
  }
  function searchSmartTrades(team,key){
    const A=roster(team),a=A.find(x=>x.key===key);if(!a)return {player:null,interests:[],results:[]};
@@ -1924,7 +1942,7 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  }
  function verdict(d){if(d.forUs>=72&&d.realism>=66)return ['AFFONDA','good'];if(d.forUs>=72&&d.realism<48)return ['OTTIMO MA DURO','warn'];if(d.forUs>=60&&d.realism>=55)return ['TRATTA','warn'];return ['DIFFICILE','bad']}
  function realismLabel(v){return v>=75?'ALTA':v>=60?'BUONA':v>=45?'MEDIA':'BASSA'}
- function reasonText(d){const r=[];if(d.needOut.need>=12)r.push(`${d.tb} è corto in <b>${d.needOut.group}</b> (${d.needOut.health.toFixed(0)}/100): il tuo giocatore ha leva.`);else r.push(`${d.tb} non ha una forte emergenza nel ruolo: leva negoziale più bassa.`);if(d.needIn.need>=10)r.push(`<b>${d.b.p.name}</b> copre un tuo bisogno in ${d.needIn.group}.`);else if(d.xiDelta>1)r.push(`<b>${d.b.p.name}</b> ha un buon fit con la tua struttura.`);else r.push(`Per te è soprattutto uno scambio di valore/profondità.`);if(d.realism>=65)r.push(`La controparte ha motivi concreti per ascoltare la proposta.`);else if(d.realism<45)r.push(`Tecnicamente può piacerti, ma per l'altro è una richiesta difficile: serve rilancio o contropartita.`);if(d.exp>=18)r.push(`Il giocatore richiesto è relativamente cedibile per loro.`);else if(d.exp<8)r.push(`Il giocatore richiesto è importante nella loro struttura: trattativa più dura.`);return r.join(' ')}
+ function reasonText(d){const r=[];if(d.oppNeedImpact?.bestClosure>=2)r.push(`${d.tb} migliora davvero <b>${d.oppNeedImpact.bestGroup}</b> (${d.oppNeedImpact.bestBefore.toFixed(0)} → ${d.oppNeedImpact.bestAfter.toFixed(0)}): il bisogno della controparte diventa una leva reale.`);else if(d.needOut.need>=12)r.push(`${d.tb} è corto in <b>${d.needOut.group}</b> (${d.needOut.health.toFixed(0)}/100): il tuo giocatore ha leva.`);else r.push(`${d.tb} non ha una forte emergenza nel ruolo: leva negoziale più bassa.`);if(d.needIn.need>=10)r.push(`<b>${d.b.p.name}</b> copre un tuo bisogno in ${d.needIn.group}.`);else if(d.xiDelta>1)r.push(`<b>${d.b.p.name}</b> ha un buon fit con la tua struttura.`);else r.push(`Per te è soprattutto uno scambio di valore/profondità.`);if(d.realism>=65)r.push(`La controparte ha motivi concreti per ascoltare la proposta.`);else if(d.realism<45)r.push(`Tecnicamente può piacerti, ma per l'altro è una richiesta difficile: serve rilancio o contropartita.`);if(d.exp>=18)r.push(`Il giocatore richiesto è relativamente cedibile per loro.`);else if(d.exp<8)r.push(`Il giocatore richiesto è importante nella loro struttura: trattativa più dura.`);return r.join(' ')}
  function setupUI(){
    const sec=$('trade');if(!sec||$('smartTradeCard'))return;
    const card=document.createElement('div');card.id='smartTradeCard';card.className='card smart-trade-card';card.innerHTML=`<div class="smart-trade-head"><div><h2>Trova lo scambio migliore</h2><div class="muted tiny">Scegli chi vuoi cedere. MAX GM analizza le altre 9 rose, le loro carenze e cosa puoi chiedere in cambio.</div></div><span class="tag">V1.4.1 · SCAMBI</span></div><div class="smart-trade-controls"><div class="control"><label>La mia squadra</label><select id="smartTradeTeam"></select></div><div class="control"><label>Voglio cedere</label><select id="smartSellPlayer"></select></div><button class="action" id="smartSearchBtn">CERCA PROPOSTE</button></div><div id="smartSellSummary" class="smart-sell-summary"></div><div id="smartTradeOutput"><div class="smart-empty">Seleziona un giocatore e premi <b>CERCA PROPOSTE</b>.</div></div>`;
@@ -1973,7 +1991,7 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  }
  function renderSmartResults(){const team=$('smartTradeTeam').value,key=$('smartSellPlayer').value,out=$('smartTradeOutput');const data=searchSmartTrades(team,key);if(!data.player){out.innerHTML='<div class="smart-empty">Giocatore non trovato.</div>';return}const topI=data.interests.slice(0,3);const interestHtml=`<div class="smart-interest-grid">${topI.map((x,i)=>`<div class="interest-card"><div class="team">#${i+1} ${x.team}</div><div class="need">Bisogno ${x.group} · salute ${x.health.toFixed(0)}/100 · interesse ${x.interest.toFixed(0)}/100</div><div class="interest-meter"><i style="width:${x.interest}%"></i></div></div>`).join('')}</div>`;
    if(!data.results.length){out.innerHTML=interestHtml+'<div class="smart-empty">Nessuna proposta sufficientemente coerente trovata.</div>';return}
-   const resHtml=`<div class="smart-results">${data.results.slice(0,8).map((d,i)=>{const [v,cl]=verdict(d);return `<div class="smart-result ${i===0?'top':''}"><div class="smart-result-main"><div><div class="smart-player">${data.player.p.name} → ${d.b.p.name}</div><div class="smart-meta">${d.tb} · ${d.b.p.role} · valore MAX ${baseRating(d.b.p).toFixed(1)} · ${v}</div></div><div class="smart-score">${d.recommendation.toFixed(0)}<small>INDICE PROPOSTA</small></div></div><div class="smart-dual-score"><div class="smart-dual ${d.forUs>=70?'good':d.forUs>=55?'warn':'bad'}"><b>${d.forUs.toFixed(0)}</b><span>CONVENIENZA PER TE</span></div><div class="smart-dual ${d.realism>=70?'good':d.realism>=50?'warn':'bad'}"><b>${d.realism.toFixed(0)}</b><span>PROBABILITÀ CHE ACCETTI · ${realismLabel(d.realism)}</span></div></div><div class="smart-chips"><span class="smart-chip ${d.interest>=75?'good':d.interest>=55?'warn':''}">Interesse loro ${d.interest.toFixed(0)}</span><span class="smart-chip ${d.realism>=70?'good':d.realism>=50?'warn':'bad'}">Realismo ${d.realism.toFixed(0)}</span><span class="smart-chip ${d.feasibility>=70?'good':d.feasibility>=55?'warn':'bad'}">Compatibilità ${d.feasibility.toFixed(0)}</span><span class="smart-chip ${d.ourScore>=0?'good':d.ourScore>=-3?'warn':'bad'}">Vantaggio tecnico ${d.ourScore>=0?'+':''}${d.ourScore.toFixed(1)}</span><span class="smart-chip">Cedibilità ${d.exp.toFixed(0)}</span><span class="smart-chip">Equilibrio asta ${d.costBalance.toFixed(0)}</span><span class="smart-chip">Fit rosa ${d.myFit.toFixed(0)}</span></div><div class="smart-reasons">${reasonText(d)}</div><div class="smart-actions"><button class="action secondary" data-smart-team="${d.tb}" data-smart-key="${d.b.key}">VALUTA QUESTO SCAMBIO</button></div></div>`}).join('')}</div>`;
+   const resHtml=`<div class="smart-results">${data.results.slice(0,8).map((d,i)=>{const [v,cl]=verdict(d);return `<div class="smart-result ${i===0?'top':''}"><div class="smart-result-main"><div><div class="smart-player">${data.player.p.name} → ${d.b.p.name}</div><div class="smart-meta">${d.tb} · ${d.b.p.role} · valore MAX ${baseRating(d.b.p).toFixed(1)} · ${v}</div></div><div class="smart-score">${d.recommendation.toFixed(0)}<small>INDICE PROPOSTA</small></div></div><div class="smart-dual-score"><div class="smart-dual ${d.forUs>=70?'good':d.forUs>=55?'warn':'bad'}"><b>${d.forUs.toFixed(0)}</b><span>CONVENIENZA PER TE</span></div><div class="smart-dual ${d.realism>=70?'good':d.realism>=50?'warn':'bad'}"><b>${d.realism.toFixed(0)}</b><span>PROBABILITÀ CHE ACCETTI · ${realismLabel(d.realism)}</span></div></div><div class="smart-chips"><span class="smart-chip ${d.interest>=75?'good':d.interest>=55?'warn':''}">Interesse loro ${d.interest.toFixed(0)}</span><span class="smart-chip ${d.realism>=70?'good':d.realism>=50?'warn':'bad'}">Realismo ${d.realism.toFixed(0)}</span><span class="smart-chip ${d.feasibility>=70?'good':d.feasibility>=55?'warn':'bad'}">Compatibilità ${d.feasibility.toFixed(0)}</span><span class="smart-chip ${d.ourScore>=0?'good':d.ourScore>=-3?'warn':'bad'}">Vantaggio tecnico ${d.ourScore>=0?'+':''}${d.ourScore.toFixed(1)}</span><span class="smart-chip">Cedibilità ${d.exp.toFixed(0)}</span><span class="smart-chip">Equilibrio asta ${d.costBalance.toFixed(0)}</span><span class="smart-chip">Fit rosa ${d.myFit.toFixed(0)}</span>${d.oppNeedImpact?.bestClosure>=2?`<span class="smart-chip good">Bisogno loro ${d.oppNeedImpact.bestGroup} +${d.oppNeedImpact.bestClosure.toFixed(1)}</span>`:''}</div><div class="smart-reasons">${reasonText(d)}</div><div class="smart-actions"><button class="action secondary" data-smart-team="${d.tb}" data-smart-key="${d.b.key}">VALUTA QUESTO SCAMBIO</button></div></div>`}).join('')}</div>`;
    const shortHtml=shortlistHtml(data,team,key);out.innerHTML=`${shortHtml}<div style="margin-top:16px"><b>Chi ha più bisogno di ${data.player.p.name}</b><div class="tiny muted">La carenza di ruolo aumenta la tua leva negoziale.</div></div>${interestHtml}<div style="margin-top:14px"><b>Altre proposte consigliate</b><div class="tiny muted">Indice proposta = convenienza per te + probabilità che l'altro accetti + bisogno di ruolo + fit della tua rosa.</div></div>${resHtml}`;
    out.querySelectorAll('[data-smart-team]').forEach(b=>b.onclick=()=>{const tb=b.dataset.smartTeam,k=b.dataset.smartKey;$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=key;$('tradePlayerB').value=k;analyzeTrade();document.querySelector('#tradeResult')?.scrollIntoView({behavior:'smooth',block:'start'});});
  }
@@ -2321,8 +2339,18 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  function groupDiff15(before,after){let worst=0,best=0,critical=false;const deltas={};for(const g of Object.keys(before.groups||{})){const d=(after.groups[g]?.score||0)-(before.groups[g]?.score||0);deltas[g]=d;worst=Math.min(worst,d);best=Math.max(best,d);const aft=after.groups[g]?.score||0,bef=before.groups[g]?.score||0;if((d<=-5.5&&aft<62)||(bef>=68&&aft<58))critical=true}return {deltas,worst,best,critical}}
  function gkCount15(recs){return recs.filter(r=>roles(r.p).has('P')).length}
  function safeSigned15(x,d=1){x=Number.isFinite(+x)?+x:0;return `${x>=0?'+':''}${x.toFixed(d)}`}
- const baseCache15=new Map();
- function clearBaseCache15(){baseCache15.clear()}
+ const baseCache15=new Map(),marginalNeedCache15=new Map();
+ function clearBaseCache15(){baseCache15.clear();marginalNeedCache15.clear()}
+ function addNeedGain15(team,arr,rec){
+   const k=`${typeof activeLeague!=='undefined'?activeLeague:'x'}:${team}:add:${rec.key}`;if(marginalNeedCache15.has(k))return marginalNeedCache15.get(k);
+   if(arr.some(r=>r.key===rec.key)){marginalNeedCache15.set(k,0);return 0}
+   const imp=needImpact(structure(arr),structure(arr.concat([{key:rec.key,price:rec.price,p:rec.p}]))),v=Math.max(0,imp.net);marginalNeedCache15.set(k,v);return v
+ }
+ function removeNeedCost15(team,arr,rec){
+   const k=`${typeof activeLeague!=='undefined'?activeLeague:'x'}:${team}:remove:${rec.key}`;if(marginalNeedCache15.has(k))return marginalNeedCache15.get(k);
+   const imp=needImpact(structure(arr),structure(arr.filter(r=>r.key!==rec.key))),v=Math.max(0,-imp.net);marginalNeedCache15.set(k,v);return v
+ }
+ function packageNeedFast15(ta,tb,outs,ins){const A=roster(ta),B=roster(tb);return {ourGain:sum15(ins.map(r=>addNeedGain15(ta,A,r)))-sum15(outs.map(r=>removeNeedCost15(ta,A,r))),oppGain:sum15(outs.map(r=>addNeedGain15(tb,B,r)))-sum15(ins.map(r=>removeNeedCost15(tb,B,r)))}}
  function baseSnapshot15(team){const k=`${typeof activeLeague!=='undefined'?activeLeague:'x'}:${team}`;if(baseCache15.has(k))return baseCache15.get(k);const R=roster(team),v={roster:R,structure:structure(R),now:lineup15(team,R,new Map()),future:futureLineup15(R)};baseCache15.set(k,v);return v}
  function evaluateMulti15(ta,tb,outKeys,inKeys){
    if(!ta||!tb||ta===tb)return {valid:false,error:'Seleziona due squadre diverse.'};
@@ -2337,10 +2365,11 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    const sA0=snapA.structure,sA1=structure(A2),sB0=snapB.structure,sB1=structure(B2);
    const nowA0=snapA.now,nowA1=lineup15(ta,A2,ownerA),nowB0=snapB.now,nowB1=lineup15(tb,B2,ownerB);
    const futA0=snapA.future,futA1=futureLineup15(A2),futB0=snapB.future,futB1=futureLineup15(B2);
-   const legalA=futA1.score>0,legalB=futB1.score>0;
+   const legalNowA=nowA1.score>0,legalNowB=nowB1.score>0,legalFutureA=futA1.score>0,legalFutureB=futB1.score>0;
+   const legalA=legalNowA&&legalFutureA,legalB=legalNowB&&legalFutureB;
    const xiNow=nowA1.score-nowA0.score,futureXi=futA1.score-futA0.score,staticXi=0,struct=sA1.score-sA0.score;
    const oppNow=nowB1.score-nowB0.score,oppFuture=futB1.score-futB0.score,oppStruct=sB1.score-sB0.score;
-   const roleDiff=groupDiff15(sA0,sA1),oppRoleDiff=groupDiff15(sB0,sB1);
+   const roleDiff=groupDiff15(sA0,sA1),oppRoleDiff=groupDiff15(sB0,sB1),ourNeedImpact=needImpact(sA0,sA1),oppNeedImpact=needImpact(sB0,sB1);
    const playerDelta=sum15(ins.map(r=>baseRating(r.p)))-sum15(outs.map(r=>baseRating(r.p)));
    const mOut=sum15(outs.map(r=>perceived15(ta,r))),mIn=sum15(ins.map(r=>perceived15(tb,r)));
    const marketAvg=Math.max(1,(mOut+mIn)/2),marketParity=clamp15(100-Math.abs(mIn-mOut)/marketAvg*145);
@@ -2348,44 +2377,48 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    const oppNeed=avg15(outs.map(r=>need15(B,r.p).need)),ourNeed=avg15(ins.map(r=>need15(A,r.p).need));
    const exp=avg15(ins.map(r=>expend15(tb,r))),dataConf=avg15([...outs.map(r=>conf15(ta,r)),...ins.map(r=>conf15(tb,r))]);
    const weeklyOut=sum15(outs.map(r=>{try{return tradeWeeklyPulse(ta,r)}catch(e){return 0}})),weeklyIn=sum15(ins.map(r=>{try{return tradeWeeklyPulse(tb,r)}catch(e){return 0}})),weeklyDelta=weeklyIn-weeklyOut;
-   const oppBenefitRaw=oppNow*.45+oppFuture*.30+oppStruct*.25,oppBenefitN=clamp15(50+oppBenefitRaw*5.2);
+   const oppBenefitRaw=oppNow*.42+oppFuture*.28+oppStruct*.22+oppNeedImpact.net*.18,oppBenefitN=clamp15(50+oppBenefitRaw*5.0);
    const xiN=clamp15(50+xiNow*5.2),futureN=clamp15(50+futureXi*4.3),structN=clamp15(50+struct*9),playerN=clamp15(50+playerDelta*2.2),marketGainN=clamp15(50+(mIn-mOut)*1.8),weeklyN=clamp15(50+weeklyDelta*4);
    const ourScore=clamp15(xiN*.28+futureN*.22+structN*.14+playerN*.09+marketGainN*.11+clamp15(50+ourNeed*2)*.08+weeklyN*.08);
-   const interest=clamp15(38+oppNeed*1.5+Math.max(0,72-sB0.score)*.22);
-   let realism=clamp15(oppBenefitN*.28+interest*.22+clamp15(50+exp*1.3)*.12+marketParity*.18+costParity*.12+clamp15(100-Math.abs(playerDelta)*2.2)*.08);
+   const interest=clamp15(38+oppNeed*.85+(oppNeedImpact.score-50)*.78+Math.max(0,72-sB0.score)*.18);
+   let realism=clamp15(oppBenefitN*.23+interest*.21+clamp15(50+exp*1.3)*.10+marketParity*.17+costParity*.11+clamp15(100-Math.abs(playerDelta)*2.2)*.07+oppNeedImpact.score*.11);
    realism=clamp15(realism-(n-1)*3.0);
    const complexityPenalty=(n-1)*2.5;
-   let score=clamp15(ourScore*.50+realism*.24+oppBenefitN*.10+marketParity*.08+dataConf*.05+costParity*.03-complexityPenalty);
+   let score=clamp15(ourScore*.49+realism*.25+oppBenefitN*.08+marketParity*.07+dataConf*.05+costParity*.03+oppNeedImpact.score*.03-complexityPenalty);
    const bestGain=Object.entries(roleDiff.deltas).sort((a,b)=>b[1]-a[1])[0]||['—',0];
-   const gkBalanced=gkCount15(outs)===gkCount15(ins);
+   const gkBalanced=gkCount15(outs)===gkCount15(ins),gkSafe=gkCount15(A2)>=1&&gkCount15(B2)>=1&&legalNowA&&legalNowB;
    const minReal=n===1?48:n===2?50:53, minOur=n===1?55:n===2?57:59, minParity=n===1?35:n===2?43:48;
    const meaningful=(xiNow>(n===3?.35:.45)||futureXi>(n===3?.55:.65)||struct>.20||bestGain[1]>(n===3?3.0:3.5));
-   const validAuto=legalA&&legalB&&gkBalanced&&!roleDiff.critical&&!oppRoleDiff.critical&&xiNow>=-.90&&futureXi>=-.85&&struct>=-.50&&oppBenefitRaw>=-.85&&realism>=minReal&&ourScore>=minOur&&marketParity>=minParity&&costParity>=30&&meaningful;
+   // Il costo d'asta è un dato storico, non un veto. Se lo scambio chiude un bisogno reale e i valori correnti sono compatibili,
+   // MAX GM può considerarlo valido anche con costi d'acquisto molto diversi.
+   const reciprocalNeed=oppNeedImpact.score>=70||ourNeedImpact.score>=70,costOk=costParity>=30||(reciprocalNeed&&marketParity>=30);
+   const validAuto=legalA&&legalB&&gkSafe&&!roleDiff.critical&&!oppRoleDiff.critical&&xiNow>=-.90&&futureXi>=-.85&&struct>=-.50&&oppBenefitRaw>=-.85&&realism>=minReal&&ourScore>=minOur&&marketParity>=minParity&&costOk&&meaningful;
    let verdict='RIFIUTA',vclass='bad';
-   if(!legalA||!legalB||!gkBalanced){verdict='NON VALIDO';vclass='bad'}
+   if(!legalA||!legalB||!gkSafe){verdict='NON VALIDO';vclass='bad'}
    else if(ourScore>=66&&!roleDiff.critical){verdict=realism>=48?'ACCETTA':'BUONO MA DIFFICILE';vclass=realism>=48?'good':'warn'}
    else if(ourScore>=54&&!roleDiff.critical){verdict='TRATTA';vclass='warn'}
-   if(!gkBalanced){score=Math.max(0,score-18);realism=Math.max(0,realism-20)}
-   return {valid:true,n,ta,tb,outs,ins,A2,B2,xiNowDelta:xiNow,futureXiDelta:futureXi,staticXiDelta:staticXi,structDelta:struct,oppNowDelta:oppNow,oppFutureDelta:oppFuture,oppStructDelta:oppStruct,oppBenefit:oppBenefitRaw,oppBenefitN,playerDelta,marketOut:mOut,marketIn:mIn,marketParity,costOut:cOut,costIn:cIn,costParity,oppNeed,ourNeed,exp,dataConf,weeklyDelta,ourScore,realism,interest,score,roleDiff,oppRoleDiff,bestGainGroup:bestGain[0],bestGainValue:bestGain[1],validAuto,gkBalanced,legalA,legalB,verdict,vclass,moduleBefore:nowA0.module,moduleAfter:nowA1.module,oppModuleBefore:nowB0.module,oppModuleAfter:nowB1.module};
+   return {valid:true,n,ta,tb,outs,ins,A2,B2,xiNowDelta:xiNow,futureXiDelta:futureXi,staticXiDelta:staticXi,structDelta:struct,oppNowDelta:oppNow,oppFutureDelta:oppFuture,oppStructDelta:oppStruct,oppBenefit:oppBenefitRaw,oppBenefitN,playerDelta,marketOut:mOut,marketIn:mIn,marketParity,costOut:cOut,costIn:cIn,costParity,oppNeed,ourNeed,exp,dataConf,weeklyDelta,ourScore,realism,interest,score,roleDiff,oppRoleDiff,ourNeedImpact,oppNeedImpact,oppNeedFit:oppNeedImpact.score,bestGainGroup:bestGain[0],bestGainValue:bestGain[1],validAuto,gkBalanced,gkSafe,legalA,legalB,legalNowA,legalNowB,verdict,vclass,moduleBefore:nowA0.module,moduleAfter:nowA1.module,oppModuleBefore:nowB0.module,oppModuleAfter:nowB1.module};
  }
  function roleGroups15(p){const rr=roles(p),out=[];for(const [g,gd] of Object.entries(GROUPS))if([...rr].some(r=>gd.roles.includes(r)))out.push(g);return out}
  function fastPlayer15(owner,other,rec,isOutgoing,ownerArr,otherArr){
    const ownNeed=need15(ownerArr,rec.p).need,otherNeed=need15(otherArr,rec.p).need,exp=expend15(owner,rec),gm=baseRating(rec.p),pv=perceived15(owner,rec),cost=+rec.price||0;
-   // Pre-filtro volutamente leggero: evita di ricalcolare interi XI per tutte le 9 squadre. Il controllo esatto arriva solo sui finalisti.
+   // V1.6.7: la shortlist usa utilità marginale reale. Un terzo portiere può essere cedibile anche se il gruppo P ha rating basso;
+   // una E che alza davvero la seconda scelta viene invece premiata. È il caso Cacciamani ↔ Perri.
+   const ownerRemoveCost=removeNeedCost15(owner,ownerArr,rec),otherAddGain=addNeedGain15(other,otherArr,rec);
    const core=clamp15((gm-68)*.55-exp*.18,0,16);
    const st=status15(owner,rec);let score;
-   if(isOutgoing) score=exp*1.48+otherNeed*1.28-ownNeed*1.18-core+(100-gm)*.05+(st==='out'?-5:0);
-   else score=otherNeed*1.38+gm*.30+exp*.74-ownNeed*.82-core*.30+(st==='out'?-8:0);
-   return {rec,ownNeed,otherNeed,exp,gm,pv,cost,core,score,groups:roleGroups15(rec.p)};
+   if(isOutgoing) score=exp*1.20+otherAddGain*1.45-ownerRemoveCost*1.25+otherNeed*.30-ownNeed*.20-core+(100-gm)*.04+(st==='out'?-5:0);
+   else score=otherAddGain*1.45+gm*.30+exp*.70-ownerRemoveCost*1.15+otherNeed*.25-core*.30+(st==='out'?-8:0);
+   return {rec,ownNeed,otherNeed,ownerRemoveCost,otherAddGain,exp,gm,pv,cost,core,score,groups:roleGroups15(rec.p)};
  }
  function packageFast15(ta,tb,outInfos,inInfos){
    const mOut=sum15(outInfos.map(x=>x.pv)),mIn=sum15(inInfos.map(x=>x.pv)),marketAvg=Math.max(1,(mOut+mIn)/2),marketParity=clamp15(100-Math.abs(mIn-mOut)/marketAvg*138);
    const cOut=sum15(outInfos.map(x=>x.cost)),cIn=sum15(inInfos.map(x=>x.cost)),costAvg=Math.max(1,(cOut+cIn)/2),costParity=clamp15(100-Math.abs(cIn-cOut)/costAvg*95);
    const baseOut=sum15(outInfos.map(x=>x.gm)),baseIn=sum15(inInfos.map(x=>x.gm)),valueDelta=baseIn-baseOut;
-   const ourGain=avg15(inInfos.map(x=>x.otherNeed))-avg15(outInfos.map(x=>x.ownNeed));
-   const oppGain=avg15(outInfos.map(x=>x.otherNeed))-avg15(inInfos.map(x=>x.ownNeed));
+   const ourGain=sum15(inInfos.map(x=>x.otherAddGain))-sum15(outInfos.map(x=>x.ownerRemoveCost));
+   const oppGain=sum15(outInfos.map(x=>x.otherAddGain))-sum15(inInfos.map(x=>x.ownerRemoveCost));
    const cedibility=avg15(inInfos.map(x=>x.exp)),ourCore=avg15(outInfos.map(x=>x.core)),theirCore=avg15(inInfos.map(x=>x.core));
-   const n=outInfos.length,ourFast=clamp15(52+valueDelta*1.15+(mIn-mOut)*.80+ourGain*.72-ourCore*.24),oppFast=clamp15(52-valueDelta*.92+(mOut-mIn)*.60+oppGain*.78+cedibility*.36-theirCore*.18);
+   const n=outInfos.length,ourFast=clamp15(52+valueDelta*1.05+(mIn-mOut)*.72+ourGain*.95-ourCore*.24),oppFast=clamp15(52-valueDelta*.82+(mOut-mIn)*.55+oppGain*1.05+cedibility*.34-theirCore*.18);
    const realism=clamp15(oppFast*.42+marketParity*.26+costParity*.16+clamp15(50+cedibility*1.1)*.16-(n-1)*2.5);
    const score=clamp15(ourFast*.52+realism*.30+marketParity*.10+costParity*.08-(n-1)*1.5);
    return {score,ourFast,oppFast,realism,marketParity,costParity,valueDelta,ourGain,oppGain};
@@ -2396,18 +2429,18 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    const inPool=B.map(r=>fastPlayer15(tb,ta,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,n===2?10:9);
    const oc=comb15(outPool,n),ic=comb15(inPool,n),cand=[];
    for(const os of oc){for(const ins of ic){
-     if(gkCount15(os.map(x=>x.rec))!==gkCount15(ins.map(x=>x.rec)))continue;
      const q=packageFast15(ta,tb,os,ins);
-     if(q.marketParity<(n===2?30:34)||q.costParity<18||q.ourFast<47||q.realism<38)continue;
+     if(q.marketParity<(n===2?30:34)||(q.costParity<18&&q.oppGain<8&&q.ourGain<8)||q.ourFast<47||q.realism<38)continue;
      cand.push({tb,outs:os.map(x=>x.rec),ins:ins.map(x=>x.rec),fast:q.score,q});
    }}
    cand.sort((a,b)=>b.fast-a.fast);return cand.slice(0,n===2?6:4);
  }
  function targetSafe15(ev,n){
-   if(!ev||!ev.valid||!ev.legalA||!ev.legalB||!ev.gkBalanced||ev.roleDiff?.critical||ev.oppRoleDiff?.critical)return false;
+   if(!ev||!ev.valid||!ev.legalA||!ev.legalB||!ev.gkSafe||ev.roleDiff?.critical||ev.oppRoleDiff?.critical)return false;
    const minReal=n===1?43:n===2?45:47,minOur=n===1?52:n===2?53:54,minParity=n===1?24:n===2?28:32;
    const gain=(ev.xiNowDelta>.10||ev.futureXiDelta>.20||ev.structDelta>.05||ev.bestGainValue>.70||ev.playerDelta>.50);
-   return ev.ourScore>=minOur&&ev.realism>=minReal&&ev.marketParity>=minParity&&ev.costParity>=16&&
+   const costOk=ev.costParity>=16||((ev.oppNeedFit||0)>=70&&ev.marketParity>=18);
+   return ev.ourScore>=minOur&&ev.realism>=minReal&&ev.marketParity>=minParity&&costOk&&
      ev.xiNowDelta>=-1.35&&ev.futureXiDelta>=-1.20&&ev.structDelta>=-.80&&ev.oppBenefit>=-1.35&&gain;
  }
  function suggestTargeted15(team,requiredKey,tb,n,limit=4){
@@ -2425,9 +2458,8 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    }
    const inSets=comb15(inPool,n),fast=[];
    for(const os of outSets)for(const ins of inSets){
-     if(gkCount15(os.map(x=>x.rec))!==gkCount15(ins.map(x=>x.rec)))continue;
      const q=packageFast15(team,tb,os,ins),minParity=n===1?14:n===2?20:25;
-     if(q.marketParity<minParity||q.costParity<8||q.ourFast<39||q.realism<29)continue;
+     if(q.marketParity<minParity||(q.costParity<8&&q.oppGain<8)||q.ourFast<39||q.realism<29)continue;
      fast.push({tb,outs:os.map(x=>x.rec),ins:ins.map(x=>x.rec),fast:q.score,q});
    }
    fast.sort((a,b)=>b.fast-a.fast);const seen=new Set(),finalists=[];
@@ -2475,8 +2507,8 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
      const outs=A.map(r=>fastPlayer15(team,tb,r,true,A,B)).sort((a,b)=>b.score-a.score).slice(0,7);
      const ins=B.map(r=>fastPlayer15(tb,team,r,false,B,A)).sort((a,b)=>b.score-a.score).slice(0,9);
      for(const o of outs)for(const i of ins){
-       if(gkCount15([o.rec])!==gkCount15([i.rec]))continue;const q=packageFast15(team,tb,[o],[i]);
-       if(q.marketParity<28||q.costParity<18||q.ourFast<46||q.realism<38)continue;fastAll.push({tb,outs:[o.rec],ins:[i.rec],fast:q.score,q});
+       const q=packageFast15(team,tb,[o],[i]);
+       if(q.marketParity<28||(q.costParity<18&&q.oppGain<8&&q.ourGain<8)||q.ourFast<46||q.realism<38)continue;fastAll.push({tb,outs:[o.rec],ins:[i.rec],fast:q.score,q});
      }
    }
    fastAll.sort((a,b)=>b.fast-a.fast);
@@ -2486,7 +2518,7 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
    exact.sort((a,b)=>b.score-a.score);const chosen=[],outs=new Set();for(const c of exact){if(outs.has(c.outs[0].key))continue;chosen.push(c);outs.add(c.outs[0].key);if(chosen.length>=limit)break}return chosen;
  }
  function normalizeSingle15(c){return {n:1,ta:c.d.ta||'',tb:c.d.tb,outs:[c.a],ins:[c.d.b],score:c.score,xiNowDelta:c.xiNowDelta,futureXiDelta:c.futureXiDelta,structDelta:c.structDelta,oppBenefit:c.oppBenefit,realism:c.d.realism,interest:c.d.interest,ourScore:c.d.forUs||c.score,marketParity:100-Math.min(100,Math.abs(c.marketGap||0)*4),reason:c.reason||'',validAuto:true,verdict:'',vclass:'',bestGainGroup:c.bestGainGroup||'—'} }
- function reason15(c){const bits=[];if(c.xiNowDelta>1.0)bits.push(`migliora l'XI di oggi (${safeSigned15(c.xiNowDelta)})`);if(c.futureXiDelta>1.1)bits.push(`alza l'XI futuro (${safeSigned15(c.futureXiDelta)})`);if(c.structDelta>.35)bits.push(`migliora la struttura (${safeSigned15(c.structDelta)})`);if(c.bestGainValue>4)bits.push(`copre una carenza in ${c.bestGainGroup}`);if(c.realism>=65)bits.push('ha una buona probabilità di essere trattabile');if(c.n>=2)bits.push(`${c.n} contropartite permettono di riequilibrare valore e ruoli`);return (bits.length?bits.slice(0,3):['supera i filtri di valore, XI, struttura e realismo']).join(' · ')+'.'}
+ function reason15(c){const bits=[];if(c.xiNowDelta>1.0)bits.push(`migliora l'XI di oggi (${safeSigned15(c.xiNowDelta)})`);if(c.futureXiDelta>1.1)bits.push(`alza l'XI futuro (${safeSigned15(c.futureXiDelta)})`);if(c.structDelta>.35)bits.push(`migliora la struttura (${safeSigned15(c.structDelta)})`);if(c.bestGainValue>4)bits.push(`copre una tua carenza in ${c.bestGainGroup}`);if(c.oppNeedImpact?.bestClosure>=2)bits.push(`${c.tb} risolve ${c.oppNeedImpact.bestGroup} (${c.oppNeedImpact.bestBefore.toFixed(0)}→${c.oppNeedImpact.bestAfter.toFixed(0)})`);if(c.realism>=65)bits.push('ha una buona probabilità di essere trattabile');if(c.n>=2)bits.push(`${c.n} contropartite permettono di riequilibrare valore e ruoli`);return (bits.length?bits.slice(0,4):['supera i filtri di valore, XI, struttura e realismo']).join(' · ')+'.'}
  function multiCard15(c,hero=false){
    const outNames=c.outs.map(r=>r.p.name).join(' + '),inNames=c.ins.map(r=>r.p.name).join(' + '),fmt=`${c.n} VS ${c.n}`;
    const trade=`<span class="v15-format-badge">${fmt}</span>${outNames} <span style="color:#f1c75b">→</span> ${inNames}`;
@@ -2534,14 +2566,14 @@ try{refreshLeagueMeta()}catch(e){console.error('V0.6 init',e)}
  function populateMultiPlayers15(){const ta=$('v15TeamA')?.value,tb=$('v15TeamB')?.value;if(!ta||!tb)return;if(ta===tb){const alt=TEAM_NAMES.find(t=>t!==ta);if(alt){$('v15TeamB').value=alt}}const aa=roster($('v15TeamA').value),bb=roster($('v15TeamB').value);for(let i=1;i<=3;i++){optionPlayers15($(`v15Out${i}`),$('v15TeamA').value,aa[i-1]?.key);optionPlayers15($(`v15In${i}`),$('v15TeamB').value,bb[i-1]?.key)}}
  function updateMultiSlots15(){const n=+$('v15Size').value;$('v15OutSlot3').classList.toggle('hidden',n<3);$('v15InSlot3').classList.toggle('hidden',n<3);$('v15Evaluate').textContent=`VALUTA ${n} VS ${n}`}
  function setMultiForm15(ta,tb,n,outs,ins){createMultiTradeUI15();$('v15TeamA').value=ta;$('v15TeamB').value=tb;$('v15Size').value=String(n);populateMultiPlayers15();updateMultiSlots15();outs.forEach((k,i)=>{if($(`v15Out${i+1}`))$(`v15Out${i+1}`).value=k});ins.forEach((k,i)=>{if($(`v15In${i+1}`))$(`v15In${i+1}`).value=k})}
- function renderMultiEval15(ev){if(!ev.valid)return `<div class="v15-verdict bad"><div class="big">ERRORE</div><div>${ev.error}</div></div>`;const out=ev.outs.map(r=>r.p.name).join(' + '),inn=ev.ins.map(r=>r.p.name).join(' + ');const metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;const warn=!ev.legalA||!ev.legalB?'<div class="market-reason" style="color:#ef8f99"><b>NON VALIDO:</b> dopo lo scambio almeno una rosa non riesce a costruire un XI Mantra legale.</div>':(!ev.gkBalanced?'<div class="market-reason" style="color:#e8b967"><b>ATTENZIONE:</b> lo scambio altera il numero di portieri nelle due rose; MAX GM lo considera poco realistico.</div>':'');return `<div class="v15-verdict ${ev.vclass}"><div class="tiny muted">VERDETTO MAX GM · ${ev.n} VS ${ev.n}</div><div class="big">${ev.verdict}</div><div class="v15-trade-line">${out}<span class="vs">⇄</span>${inn}</div><div class="tiny muted">${ev.ta} ↔ ${ev.tb}</div></div><div class="market-metrics">${metric('Vantaggio tuo',ev.ourScore.toFixed(0)+'/100',ev.ourScore>=65?'good':ev.ourScore<50?'bad':'warn')}${metric('Prob. accetta',ev.realism.toFixed(0)+'%',ev.realism>=65?'good':ev.realism<45?'bad':'warn')}${metric('XI oggi',safeSigned15(ev.xiNowDelta),ev.xiNowDelta>0?'good':ev.xiNowDelta<0?'bad':'')}${metric('XI futuro',safeSigned15(ev.futureXiDelta),ev.futureXiDelta>0?'good':'')}${metric('Struttura',safeSigned15(ev.structDelta),ev.structDelta>0?'good':'')}${metric('Loro',safeSigned15(ev.oppBenefit),ev.oppBenefit>=0?'good':'warn')}</div><div class="market-reason">${reason15(ev)}</div>${warn}<div class="grid g2" style="margin-top:10px"><div class="card" style="box-shadow:none"><h3>Valori scambio</h3><div class="roleline"><span>Valore percepito ceduto</span><span>${ev.marketOut.toFixed(0)}</span></div><div class="roleline"><span>Valore percepito ricevuto</span><span>${ev.marketIn.toFixed(0)}</span></div><div class="roleline"><span>Parità di mercato</span><span>${ev.marketParity.toFixed(0)}%</span></div><div class="roleline"><span>Costo asta</span><span>${ev.costOut.toFixed(0)} ↔ ${ev.costIn.toFixed(0)}</span></div></div><div class="card" style="box-shadow:none"><h3>Effetto rosa</h3><div class="roleline"><span>Modulo</span><span>${ev.moduleBefore} → <b>${ev.moduleAfter}</b></span></div><div class="roleline"><span>Miglior ruolo</span><span>${ev.bestGainGroup} ${safeSigned15(ev.bestGainValue)}</span></div><div class="roleline"><span>Interesse loro</span><span>${ev.interest.toFixed(0)}%</span></div><div class="roleline"><span>Affidabilità dati</span><span>${ev.dataConf.toFixed(0)}%</span></div></div></div>`}
+ function renderMultiEval15(ev){if(!ev.valid)return `<div class="v15-verdict bad"><div class="big">ERRORE</div><div>${ev.error}</div></div>`;const out=ev.outs.map(r=>r.p.name).join(' + '),inn=ev.ins.map(r=>r.p.name).join(' + ');const metric=(l,v,cl='')=>`<div class="market-metric"><span>${l}</span><b class="${cl}">${v}</b></div>`;const warn=!ev.legalA||!ev.legalB||!ev.gkSafe?'<div class="market-reason" style="color:#ef8f99"><b>NON VALIDO:</b> dopo lo scambio almeno una rosa non mantiene un XI Mantra/portiere utilizzabile.</div>':(!ev.gkBalanced?'<div class="market-reason" style="color:#74dcaa"><b>SCAMBIO CROSS-RUOLO:</b> il numero di portieri cambia, ma entrambe le rose restano coperte. MAX GM lo valuta normalmente.</div>':'');return `<div class="v15-verdict ${ev.vclass}"><div class="tiny muted">VERDETTO MAX GM · ${ev.n} VS ${ev.n}</div><div class="big">${ev.verdict}</div><div class="v15-trade-line">${out}<span class="vs">⇄</span>${inn}</div><div class="tiny muted">${ev.ta} ↔ ${ev.tb}</div></div><div class="market-metrics">${metric('Vantaggio tuo',ev.ourScore.toFixed(0)+'/100',ev.ourScore>=65?'good':ev.ourScore<50?'bad':'warn')}${metric('Prob. accetta',ev.realism.toFixed(0)+'%',ev.realism>=65?'good':ev.realism<45?'bad':'warn')}${metric('XI oggi',safeSigned15(ev.xiNowDelta),ev.xiNowDelta>0?'good':ev.xiNowDelta<0?'bad':'')}${metric('XI futuro',safeSigned15(ev.futureXiDelta),ev.futureXiDelta>0?'good':'')}${metric('Struttura',safeSigned15(ev.structDelta),ev.structDelta>0?'good':'')}${metric('Loro',safeSigned15(ev.oppBenefit),ev.oppBenefit>=0?'good':'warn')}</div><div class="market-reason">${reason15(ev)}</div>${warn}<div class="grid g2" style="margin-top:10px"><div class="card" style="box-shadow:none"><h3>Valori scambio</h3><div class="roleline"><span>Valore percepito ceduto</span><span>${ev.marketOut.toFixed(0)}</span></div><div class="roleline"><span>Valore percepito ricevuto</span><span>${ev.marketIn.toFixed(0)}</span></div><div class="roleline"><span>Parità di mercato</span><span>${ev.marketParity.toFixed(0)}%</span></div><div class="roleline"><span>Costo asta</span><span>${ev.costOut.toFixed(0)} ↔ ${ev.costIn.toFixed(0)}</span></div></div><div class="card" style="box-shadow:none"><h3>Effetto rosa</h3><div class="roleline"><span>Modulo</span><span>${ev.moduleBefore} → <b>${ev.moduleAfter}</b></span></div><div class="roleline"><span>Miglior ruolo</span><span>${ev.bestGainGroup} ${safeSigned15(ev.bestGainValue)}</span></div><div class="roleline"><span>Interesse loro</span><span>${ev.interest.toFixed(0)}%</span></div><div class="roleline"><span>Bisogno loro</span><span>${ev.oppNeedImpact?.bestClosure>=2?`${ev.oppNeedImpact.bestGroup} ${ev.oppNeedImpact.bestBefore.toFixed(0)}→${ev.oppNeedImpact.bestAfter.toFixed(0)}`:'—'}</span></div><div class="roleline"><span>Affidabilità dati</span><span>${ev.dataConf.toFixed(0)}%</span></div></div></div>`}
  function evaluateMultiForm15(){clearBaseCache15();const n=+$('v15Size').value,outs=[],ins=[];for(let i=1;i<=n;i++){outs.push($(`v15Out${i}`).value);ins.push($(`v15In${i}`).value)}if(unique15(outs).length!==n||unique15(ins).length!==n){const ev={valid:false,error:'Hai selezionato due volte lo stesso giocatore. Scegli giocatori diversi.'};$('v15MultiResult').innerHTML=renderMultiEval15(ev);return ev}const ev=evaluateMulti15($('v15TeamA').value,$('v15TeamB').value,outs,ins);$('v15MultiResult').innerHTML=renderMultiEval15(ev);return ev}
  function brand15(){if(window.MAXGM_ACTIVE_VERSION||window.MAXGM_V16)return;const v=document.querySelector('.version');if(v&&v.textContent!=='V1.5.5 · SCAMBI MULTIPLI')v.textContent='V1.5.5 · SCAMBI MULTIPLI';if(document.title!=='MAX GM V1.5.5 — Scambi multipli')document.title='MAX GM V1.5.5 — Scambi multipli';const f=$('appFooter');if(f)f.textContent=`MAX GM V1.5.5 · ${DB?.meta?.name||''} · Formazione · Scambi 1vs1/2vs2/3vs3 · Idee automatiche · PWA`}
  function wire15(){installMarketControl15();createMultiTradeUI15();brand15();const btn=$('marketRefresh');if(btn)btn.onclick=renderMarket15;const sel=$('marketTeam');if(sel)sel.onchange=renderMarket15;const fmt=$('marketFormat');if(fmt)fmt.onchange=renderMarket15;document.addEventListener('click',e=>{if(e.target.closest('[data-view="market"]'))setTimeout(()=>{installMarketControl15();brand15();if(!window.MAXGM_V16)renderMarket15()},180)});const old=window.switchLeague;window.switchLeague=function(k){old(k);setTimeout(()=>{installMarketControl15();createMultiTradeUI15();const ta=$('v15TeamA'),tb=$('v15TeamB');if(ta)optionsForSelect(ta,TEAM_NAMES,DEFAULT_TEAM);if(tb)optionsForSelect(tb,TEAM_NAMES,TEAM_NAMES.find(t=>t!==DEFAULT_TEAM));populateMultiPlayers15();brand15();if($('market')?.classList.contains('active')&&!window.MAXGM_V16)renderMarket15()},220)};
  }
  function selfTest15(){try{const ta=DEFAULT_TEAM,tb=TEAM_NAMES.find(t=>t!==ta),A=roster(ta),B=roster(tb),Af=A.filter(r=>!roles(r.p).has('P')),Bf=B.filter(r=>!roles(r.p).has('P'));const e2=evaluateMulti15(ta,tb,Af.slice(0,2).map(r=>r.key),Bf.slice(0,2).map(r=>r.key));const e3=evaluateMulti15(ta,tb,Af.slice(0,3).map(r=>r.key),Bf.slice(0,3).map(r=>r.key));const dup=evaluateMulti15(ta,tb,[Af[0].key,Af[0].key],[Bf[0].key,Bf[1].key]);const wrong=evaluateMulti15(ta,ta,[Af[0].key],[Af[1].key]);const t2=performance.now(),m2=suggestMulti15(ta,2,3),ms2=performance.now()-t2,t3=performance.now(),m3=suggestMulti15(ta,3,2),ms3=performance.now()-t3;const vals=[e2.score,e2.realism,e3.score,e3.realism].every(Number.isFinite),rosters=e2.A2.length===A.length&&e3.A2.length===A.length&&new Set(e3.A2.map(r=>r.key)).size===e3.A2.length;const auto=[...m2,...m3].every(x=>x.valid&&x.validAuto&&x.ta===ta&&x.tb!==ta&&Number.isFinite(x.score));const brandOk=/V1\.(?:5\.5|6\.)/.test(document.querySelector('.version')?.textContent||'');const diverse=[...m2,...m3].length===new Set([...m2,...m3].map(x=>x.tb+'|'+x.n)).size;const vergaraKey=Object.keys(LEAGUES.urbe.rosters).find(k=>normalizeFantasyTeamName15(k)===normalizeFantasyTeamName15('VERGARA’S COFFEE TEAM'));const vergaraRoster=vergaraKey?LEAGUES.urbe.rosters[vergaraKey]:[];const vergaraOk=!!vergaraKey&&vergaraRoster.length===30;return {ok:e2.valid&&e3.valid&&!dup.valid&&!wrong.valid&&vals&&rosters&&auto&&brandOk&&diverse&&vergaraOk,brandOk,diverse,vergaraOk,vergaraKey,vergaraPlayers:vergaraRoster.length,e2:{score:e2.score,realism:e2.realism},e3:{score:e3.score,realism:e3.realism},suggest2:m2.length,suggest3:m3.length,ms2:+ms2.toFixed(0),ms3:+ms3.toFixed(0)}}catch(e){return {ok:false,error:String(e&&e.stack||e)}}}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',wire15);else wire15();
- window.MAXGM_V15={version:V15,evaluateMulti:evaluateMulti15,suggestSingle:suggestSingle15,suggestMulti:suggestMulti15,suggestTargeted:suggestTargeted15,renderMarket:renderMarket15,selfTest:selfTest15,setMultiForm:setMultiForm15};
+ window.MAXGM_V15={version:V15,evaluateMulti:evaluateMulti15,suggestSingle:suggestSingle15,suggestMulti:suggestMulti15,suggestTargeted:suggestTargeted15,renderMarket:renderMarket15,selfTest:selfTest15,setMultiForm:setMultiForm15,packageNeedFast:packageNeedFast15};
  if(new URLSearchParams(location.search).get('v15test')==='1'){setTimeout(()=>{const r=selfTest15(),d=document.createElement('div');d.id='v15-selftest';d.textContent=(r.ok?'V15_SELFTEST_OK ':'V15_SELFTEST_FAIL ')+JSON.stringify(r);document.body.appendChild(d)},900)}
 })();
 </script>
@@ -2746,7 +2778,7 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
 <script id="maxgm-v164-news-risk">
 (function(){
 'use strict';
-const V='V1.6.6', BADGE='V1.6.6 · GK SHORTLIST + NEWS AWARE', TITLE='MAX GM V1.6.6 — GK Shortlist + News Aware';
+const V='V1.6.7', BADGE='V1.6.7 · COUNTERPARTY NEEDS', TITLE='MAX GM V1.6.7 — Counterparty Needs Engine';
 const $=id=>document.getElementById(id);
 const NEWS_KEY='maxgm-v164:news-cache', CHECK_KEY='maxgm-v164:last-news-check';
 const EMBEDDED={
@@ -2806,22 +2838,23 @@ function ensureAlerts(){
 }
 
 function fmtSigned(x){x=Number(x)||0;return `${x>=0?'+':''}${x.toFixed(1)}`}
-function canReceiveGk(tb,r){const m=getMatchInput(tb,r.key);return String(m.status||'ok').toLowerCase()!=='out'&&((+m.starter||0)>=35||(+m.vote||0)>=55||baseRating(r.p)>=72)}
+function canReceiveGk(tb,r){const m=getMatchInput(tb,r.key);return String(m.status||'ok').toLowerCase()!=='out'&&((+m.starter||0)>=20||(+m.vote||0)>=50||baseRating(r.p)>=65)}
 function comb164(arr,n){const out=[];function rec(i,p){if(p.length===n){out.push(p.slice());return}for(let k=i;k<=arr.length-(n-p.length);k++){p.push(arr[k]);rec(k+1,p);p.pop()}}rec(0,[]);return out}
 function pv164(team,r){try{return window.MAXGM_V13?.perceivedMarketValue(team,r)??baseRating(r.p)}catch(e){return baseRating(r.p)}}
 function exp164(team,r){try{return window.MAXGM_V13?.playerExpendability(team,r)??8}catch(e){return 8}}
 function need164(arr,p){try{return needForPlayer(arr,p)?.need||0}catch(e){return 0}}
-function reliableGk164(owner,r){if(!roles(r.p).has('P'))return false;const m=getMatchInput(owner,r.key),st=String(m.status||'ok').toLowerCase();return st!=='out'&&((+m.starter||0)>=35||(+m.vote||0)>=55||baseRating(r.p)>=72)}
+function reliableGk164(owner,r){if(!roles(r.p).has('P'))return false;const m=getMatchInput(owner,r.key),st=String(m.status||'ok').toLowerCase();return st!=='out'&&((+m.starter||0)>=20||(+m.vote||0)>=50||baseRating(r.p)>=65)}
 function usableAfter164(ev,side){const arr=side==='A'?ev.A2:ev.B2,home=side==='A'?ev.ta:ev.tb,other=side==='A'?ev.tb:ev.ta,incoming=new Set((side==='A'?ev.ins:ev.outs).map(r=>r.key));return arr.filter(r=>reliableGk164(incoming.has(r.key)?other:home,r)).length}
-function fastEmergency164(team,tb,outs,ins,A,B){const vo=outs.reduce((s,r)=>s+pv164(team,r),0),vi=ins.reduce((s,r)=>s+pv164(tb,r),0),avg=Math.max(1,(vo+vi)/2),parity=Math.max(0,100-Math.abs(vi-vo)/avg*125);const ourNeed=ins.reduce((s,r)=>s+(roles(r.p).has('P')?24:need164(A,r.p)),0)-outs.reduce((s,r)=>s+need164(A,r.p),0);const oppNeed=outs.reduce((s,r)=>s+need164(B,r.p),0)-ins.reduce((s,r)=>s+need164(B,r.p),0);const ced=ins.reduce((s,r)=>s+exp164(tb,r),0)/Math.max(1,ins.length);const costOut=outs.reduce((s,r)=>s+(+r.price||0),0),costIn=ins.reduce((s,r)=>s+(+r.price||0),0),ca=Math.max(1,(costOut+costIn)/2),costParity=Math.max(0,100-Math.abs(costIn-costOut)/ca*90);return {score:parity*.44+costParity*.12+Math.max(0,Math.min(100,50+ourNeed*2.3))*.19+Math.max(0,Math.min(100,50+oppNeed*2.0))*.15+Math.max(0,Math.min(100,50+ced*1.3))*.10-(outs.length-1)*2.5,parity,costParity,ourNeed,oppNeed}}
+function fastEmergency164(team,tb,outs,ins,A,B){const vo=outs.reduce((s,r)=>s+pv164(team,r),0),vi=ins.reduce((s,r)=>s+pv164(tb,r),0),avg=Math.max(1,(vo+vi)/2),parity=Math.max(0,100-Math.abs(vi-vo)/avg*125);const marginal=window.MAXGM_V15?.packageNeedFast?.(team,tb,outs,ins)||{ourGain:0,oppGain:0};const keeperGain=ins.some(r=>roles(r.p).has('P'))?24:0,ourNeed=keeperGain+marginal.ourGain,oppNeed=marginal.oppGain;const ced=ins.reduce((s,r)=>s+exp164(tb,r),0)/Math.max(1,ins.length);const costOut=outs.reduce((s,r)=>s+(+r.price||0),0),costIn=ins.reduce((s,r)=>s+(+r.price||0),0),ca=Math.max(1,(costOut+costIn)/2),costParity=Math.max(0,100-Math.abs(costIn-costOut)/ca*90);return {score:parity*.40+costParity*.10+Math.max(0,Math.min(100,50+ourNeed*2.3))*.20+Math.max(0,Math.min(100,50+oppNeed*2.2))*.22+Math.max(0,Math.min(100,50+ced*1.3))*.08-(outs.length-1)*2.5,parity,costParity,ourNeed,oppNeed}}
 function emergencySafe164(ev){
  if(!ev?.valid||!ev.legalA||!ev.legalB||ev.roleDiff?.critical||ev.oppRoleDiff?.critical)return false;
  const ua=usableAfter164(ev,'A'),ub=usableAfter164(ev,'B');if(ua<2||ub<1)return false;
- const real=Math.min(100,(+ev.realism||0)+(ev.gkBalanced?0:20)+(ub>=2?5:0)),riskBonus=ua>=2?18:0,quality=(+ev.score||0)+riskBonus+(ub>=2?3:0);
+ const mutualNeed=Math.max(0,(+ev.oppNeedFit||50)-50),real=Math.min(100,(+ev.realism||0)+mutualNeed*.16+(ub>=2?3:0)),riskBonus=ua>=2?18:0,quality=(+ev.score||0)+riskBonus+(ub>=2?3:0)+mutualNeed*.10;
  ev.emergencyRealism=real;ev.usableAfter=ua;ev.oppUsableAfter=ub;
  // Due fasce: VALIDATA = supera i filtri più severi; TRATTATIVA = resta sicura e realistica ma richiede negoziazione.
- const strict=ev.marketParity>=18&&ev.costParity>=10&&real>=38&&ev.oppBenefit>=-1.65&&ev.xiNowDelta>=-1.8&&ev.futureXiDelta>=-1.5&&ev.structDelta>=-1.0;
- const trade=ev.marketParity>=12&&ev.costParity>=5&&real>=30&&ev.oppBenefit>=-3.0&&ev.xiNowDelta>=-3.0&&ev.futureXiDelta>=-2.6&&ev.structDelta>=-2.0;
+ const needException=(ev.oppNeedFit||0)>=70;
+ const strict=ev.marketParity>=18&&(ev.costParity>=10||needException)&&real>=38&&ev.oppBenefit>=-1.65&&ev.xiNowDelta>=-1.8&&ev.futureXiDelta>=-1.5&&ev.structDelta>=-1.0;
+ const trade=ev.marketParity>=12&&(ev.costParity>=5||needException)&&real>=30&&ev.oppBenefit>=-3.0&&ev.xiNowDelta>=-3.0&&ev.futureXiDelta>=-2.6&&ev.structDelta>=-2.0;
  if(!strict&&!trade)return false;
  ev.validAutoEmergency=strict;ev.emergencyTier=strict?'validated':'trade';
  ev.emergencyScore=Math.max(0,Math.min(100,quality-(strict?0:6)));
@@ -2836,6 +2869,8 @@ function emergencyShortlist164(all){
  const add=x=>{const sig=x.tb+'|'+x.outs.map(r=>r.key).join(',')+'|'+x.ins.map(r=>r.key).join(',');if(used.has(sig)||out.length>=8)return false;const g=x.ins.find(r=>roles(r.p).has('P'))?.key||'';if((teamCount.get(x.tb)||0)>=2)return false;if(g&&(gkCount.get(g)||0)>=2)return false;used.add(sig);out.push(x);teamCount.set(x.tb,(teamCount.get(x.tb)||0)+1);if(g)gkCount.set(g,(gkCount.get(g)||0)+1);return true};
  // Prima prova a dare almeno un'opzione per ciascun formato disponibile.
  for(const n of [1,2,3]){const x=uniq.find(z=>z.n===n);if(x)add(x)}
+ // Poi riserva una leva di bisogno reale della controparte (es. E corta in cambio di un portiere in surplus).
+ const mutual=uniq.slice().sort((a,b)=>(b.oppNeedFit||0)-(a.oppNeedFit||0)).find(x=>(x.oppNeedFit||0)>=62);if(mutual)add(mutual);
  // Poi privilegia portieri e controparti diverse.
  for(const x of uniq){if(out.length>=8)break;add(x)}
  // Se i limiti di diversificazione fossero troppo stretti, completa comunque la shortlist.
@@ -2855,13 +2890,25 @@ function emergencyCandidates(team){
      for(const n of [1,2,3]){
        const opool=outBase.slice(0,n===1?12:n===2?9:8),outSets=comb164(opool,n);let inSets=[];
        if(n===1)inSets=[[gk]];else if(n===2)inSets=fillers.map(x=>[gk,x]);else inSets=comb164(fillers.slice(0,8),2).map(xs=>[gk,...xs]);
-       for(const outs of outSets)for(const ins of inSets){const q=fastEmergency164(team,tb,outs,ins,A,B);if(q.parity<8||q.costParity<4)continue;fast.push({tb,n,outs,ins,q,gkKey:gk.key})}
+       for(const outs of outSets)for(const ins of inSets){const q=fastEmergency164(team,tb,outs,ins,A,B);if(q.parity<8||(q.costParity<4&&q.oppNeed<8))continue;fast.push({tb,n,outs,ins,q,gkKey:gk.key})}
      }
    }
  }
  fast.sort((a,b)=>b.q.score-a.q.score);
  // Valutazione esatta adattiva: se i primi candidati falliscono, continua a cercare invece di fermarsi a 3 tentativi per formato.
  const all=[],evaluated=new Set(),targets={1:3,2:3,3:2},caps={1:18,2:22,3:22};
+ // V1.6.7: prima della classifica generale valuta una proposta 1vs1 "bisogno reciproco" per ogni portiere/controparte.
+ // Così un caso come Cacciamani → Perri non viene perso solo perché il costo d'asta storico o il valore grezzo lo tengono fuori dai primi candidati.
+ const needSeedMap=new Map();
+ for(const x of fast.filter(z=>z.n===1&&z.q.oppNeed>=8)){
+   const k=x.tb+'|'+x.gkKey,seedScore=x.q.parity*1.2+x.q.oppNeed+x.q.ourNeed*.30,old=needSeedMap.get(k);
+   if(!old||seedScore>old.seedScore)needSeedMap.set(k,{...x,seedScore})
+ }
+ for(const x of [...needSeedMap.values()]){
+   const sig=x.tb+'|'+x.outs.map(r=>r.key).join(',')+'|'+x.ins.map(r=>r.key).join(',');if(evaluated.has(sig))continue;evaluated.add(sig);
+   const ev=window.MAXGM_V15?.evaluateMulti?.(team,x.tb,x.outs.map(r=>r.key),x.ins.map(r=>r.key));if(!emergencySafe164(ev))continue;
+   ev.v164Type='1';ev.score=ev.emergencyScore;ev.realism=ev.emergencyRealism;ev.emergencyIncomingGk=x.gkKey;ev.needSeed=true;all.push(ev)
+ }
  for(const n of [1,2,3]){
    const rows=fast.filter(x=>x.n===n),perTeam=new Map();let checked=0,found=0;
    for(const pass of [1,2,3]){
@@ -2875,7 +2922,7 @@ function emergencyCandidates(team){
  }
  return emergencyShortlist164(all)
 }
-function gkCard(ev,i){const outs=ev.outs.map(r=>r.p.name).join(' + '),ins=ev.ins.map(r=>r.p.name).join(' + '),fmt=`${ev.n} VS ${ev.n}`,strict=ev.emergencyTier==='validated'||ev.validAutoEmergency||ev.validAuto;return `<div class="v164-gk-card"><div class="v164-gk-head"><div><div class="v164-kicker">${i===0?'SOLUZIONE PORTIERE PREFERITA':(strict?'ALTERNATIVA VALIDATA':'TRATTATIVA REALISTICA')}</div><div class="v164-gk-trade">${esc(outs)} <span style="color:#f1c75b">→</span> ${esc(ins)}</div><div class="tiny muted">con ${esc(ev.tb)}</div></div><div class="v164-gk-score">${Math.round(ev.score)}<small>QUALITÀ /100</small></div></div><div class="v164-gk-tags"><span class="v164-pill gold">${fmt}</span><span class="v164-pill good">XI ${fmtSigned(ev.xiNowDelta)}</span><span class="v164-pill ${strict?'good':'gold'}">${strict?'VALIDATA':'TRATTATIVA'}</span><span class="v164-pill">Realismo ${Math.round(ev.realism)}%</span></div><div class="v164-gk-reason">Obiettivo prioritario: uscire dall’emergenza portiere senza peggiorare in modo critico la struttura della rosa. La proposta resta filtrata anche dal beneficio per la controparte e dalla parità di mercato.</div><div class="market-card-actions"><button class="action secondary v164-eval" data-team="${encodeURIComponent(ev.tb)}" data-n="${ev.n}" data-out="${ev.outs.map(r=>r.key).join(',')}" data-in="${ev.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
+function gkCard(ev,i){const outs=ev.outs.map(r=>r.p.name).join(' + '),ins=ev.ins.map(r=>r.p.name).join(' + '),fmt=`${ev.n} VS ${ev.n}`,strict=ev.emergencyTier==='validated'||ev.validAutoEmergency||ev.validAuto;return `<div class="v164-gk-card"><div class="v164-gk-head"><div><div class="v164-kicker">${i===0?'SOLUZIONE PORTIERE PREFERITA':(strict?'ALTERNATIVA VALIDATA':'TRATTATIVA REALISTICA')}</div><div class="v164-gk-trade">${esc(outs)} <span style="color:#f1c75b">→</span> ${esc(ins)}</div><div class="tiny muted">con ${esc(ev.tb)}</div></div><div class="v164-gk-score">${Math.round(ev.score)}<small>QUALITÀ /100</small></div></div><div class="v164-gk-tags"><span class="v164-pill gold">${fmt}</span><span class="v164-pill good">XI ${fmtSigned(ev.xiNowDelta)}</span><span class="v164-pill ${strict?'good':'gold'}">${strict?'VALIDATA':'TRATTATIVA'}</span><span class="v164-pill">Realismo ${Math.round(ev.realism)}%</span></div><div class="v164-gk-reason">Obiettivo prioritario: uscire dall’emergenza portiere senza peggiorare in modo critico la struttura della rosa.${ev.oppNeedImpact?.bestClosure>=2?` <b>${esc(ev.tb)}</b> riceve una pedina che migliora <b>${esc(ev.oppNeedImpact.bestGroup)}</b> da ${ev.oppNeedImpact.bestBefore.toFixed(0)} a ${ev.oppNeedImpact.bestAfter.toFixed(0)}: questo bisogno aumenta il realismo della trattativa.`:' La proposta resta filtrata anche dal beneficio per la controparte e dalla parità di mercato.'}</div><div class="market-card-actions"><button class="action secondary v164-eval" data-team="${encodeURIComponent(ev.tb)}" data-n="${ev.n}" data-out="${ev.outs.map(r=>r.key).join(',')}" data-in="${ev.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
 function wireEval(root,team){root.querySelectorAll('.v164-eval').forEach(b=>b.onclick=()=>{const tb=decodeURIComponent(b.dataset.team),n=+b.dataset.n,outs=b.dataset.out.split(','),ins=b.dataset.in.split(',');document.querySelector('[data-view="trade"]')?.click();setTimeout(()=>{if(n===1){$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=outs[0];$('tradePlayerB').value=ins[0];analyzeTrade()}else{window.MAXGM_V15?.setMultiForm?.(team,tb,n,outs,ins);$('v15Evaluate')?.click()}},150)})}
 function findKeeperSolutions164(team){
  const market=$('market'),out=$('marketOutput'),st=$('marketStatus');if(!out)return;const r=keeperRisk(team);if(!r.outs.length){out.innerHTML='<div class="smart-empty"><b>Nessun portiere OUT rilevato.</b><br>Il reparto non richiede uno scambio d’emergenza.</div>';return}
@@ -2891,7 +2938,7 @@ async function refreshNews(silent=true){
 }
 function installLiveStatus(){const live=$('live');if(!live||$('v164LiveBox'))return;const box=document.createElement('div');box.id='v164LiveBox';box.className='v164-livebox';box.innerHTML=`<div class="v164-live-row"><div><div class="v164-kicker">NEWS LIVE</div><h3>Indisponibilità che cambiano le decisioni</h3><div class="v164-live-state" id="v164LiveState"></div></div><button class="action secondary" id="v164LiveRefresh">AGGIORNA NEWS</button></div>`;live.insertBefore(box,live.children[1]||null);$('v164LiveRefresh').onclick=()=>refreshNews(false);renderLiveState()}
 function renderLiveState(){const el=$('v164LiveState');if(!el)return;const injured=Object.values(NEWS).filter(x=>x.status==='out').length,cfg=typeof syncConfig16==='function'?syncConfig16():{};el.innerHTML=`Ultimo controllo: <b>${esc(freshLabel())}</b> · indisponibilità memorizzate: <b>${injured}</b> · sync automatico: <b>${cfg?.url&&cfg?.token?'ATTIVO (apertura + 30 min)':'DA COLLEGARE'}</b>`}
-function brand(){const v=document.querySelector('.version');if(v&&v.textContent!==BADGE)v.textContent=BADGE;if(document.title!==TITLE)document.title=TITLE;const f=$('appFooter');if(f)f.textContent=`MAX GM ${V} · News → rischio rosa → decisione · Rose dinamiche · Scambi 1/2/3 vs 1/2/3`}
+function brand(){const v=document.querySelector('.version');if(v&&v.textContent!==BADGE)v.textContent=BADGE;if(document.title!==TITLE)document.title=TITLE;const f=$('appFooter');if(f)f.textContent=`MAX GM ${V} · Bisogni controparte · News → rischio rosa → decisione · Scambi 1/2/3 vs 1/2/3`}
 function hook(){
  brand();installRiskWeights();mergeNews(Object.values(EMBEDDED));localStorage.setItem(CHECK_KEY,localStorage.getItem(CHECK_KEY)||'2026-09-20T22:57:00+02:00');ensureAlerts();installLiveStatus();renderLiveState();
  for(const id of ['homeTeam','marketTeam'])$(id)?.addEventListener('change',()=>setTimeout(ensureAlerts,40));
@@ -2904,6 +2951,34 @@ hook();
 window.addEventListener('DOMContentLoaded',()=>{setTimeout(()=>{brand();ensureAlerts();installLiveStatus();renderLiveState()},700);setTimeout(brand,1600)});
 setTimeout(()=>{brand();ensureAlerts()},900);
 Object.assign(window.MAXGM_V164,{version:V,booting:false,newsFor,keeperRisk,refreshNews,findKeeperSolutions:findKeeperSolutions164,emergencyCandidates});
+})();
+</script>
+
+
+<script id="maxgm-v167-selftest">
+(function(){
+ if(!new URLSearchParams(location.search).has('v167test'))return;
+ const wait=ms=>new Promise(r=>setTimeout(r,ms));
+ window.addEventListener('load',async()=>{
+  await wait(1200);const R={tests:[]};
+  try{
+   switchLeague('park');await wait(450);clearBaseCache15?.();
+   const ev=window.MAXGM_V15?.evaluateMulti?.('Aston Birra','Soccy Boys United',['p:cacciamani'],['p:perri']);
+   const targ=window.MAXGM_V16?.targetedIdeas?.('Aston Birra','p:cacciamani','Soccy Boys United','all')||[];
+   const emer=window.MAXGM_V164?.emergencyCandidates?.('Aston Birra')||[];
+   const hitT=targ.find(x=>x.n===1&&x.outs?.some(r=>r.key==='p:cacciamani')&&x.ins?.some(r=>r.key==='p:perri'));
+   const hitE=emer.find(x=>x.n===1&&x.outs?.some(r=>r.key==='p:cacciamani')&&x.ins?.some(r=>r.key==='p:perri'));
+   R.direct=ev?{valid:ev.valid,validAuto:ev.validAuto,gkBalanced:ev.gkBalanced,gkSafe:ev.gkSafe,realism:ev.realism,score:ev.score,oppNeedFit:ev.oppNeedFit,oppNeedImpact:ev.oppNeedImpact,oppBenefit:ev.oppBenefit}:null;
+   R.targeted=targ.map(x=>({trade:x.outs.map(r=>r.p.name).join('+')+' -> '+x.ins.map(r=>r.p.name).join('+'),score:x.score,realism:x.realism,need:x.oppNeedFit}));
+   R.emergency=emer.map(x=>({trade:x.outs.map(r=>r.p.name).join('+')+' -> '+x.ins.map(r=>r.p.name).join('+'),team:x.tb,score:x.score,realism:x.realism,need:x.oppNeedFit}));
+   R.tests.push({name:'cross_role_gk_allowed',pass:!!ev?.gkSafe&&ev?.legalA&&ev?.legalB});
+   R.tests.push({name:'soccy_need_is_E',pass:ev?.oppNeedImpact?.bestGroup==='E'&&ev?.oppNeedImpact?.bestClosure>0});
+   R.tests.push({name:'perri_cacciamani_targeted_visible',pass:!!hitT});
+   R.tests.push({name:'perri_cacciamani_emergency_visible',pass:!!hitE});
+   R.ok=R.tests.every(x=>x.pass);
+  }catch(e){R.ok=false;R.error=String(e?.stack||e)}
+  const pre=document.createElement('pre');pre.id='v167testResult';pre.textContent=JSON.stringify(R,null,2);pre.style='white-space:pre-wrap;background:#000;color:#fff;padding:12px;position:relative;z-index:99999';document.body.appendChild(pre);document.title='V167TEST '+(R.ok?'OK':'FAIL');
+ });
 })();
 </script>
 
