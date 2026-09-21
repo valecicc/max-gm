@@ -1,8 +1,8 @@
 {
-  "name": "MAX GM V1.6.3",
+  "name": "MAX GM V1.6.5",
   "short_name": "MAX GM",
-  "description": "MAX GM — Rose dinamiche, scambi mirati con ricerca estesa, formazione e analisi lega.",
-  "start_url": "./?app=1.6.3",
+  "description": "MAX GM — News aware, rischio rosa, emergenza portiere, rose dinamiche e scambi mirati.",
+  "start_url": "./?app=1.6.5",
   "scope": "./",
   "display": "standalone",
   "background_color": "#07111f",
