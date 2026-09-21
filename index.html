@@ -2783,7 +2783,7 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
 <script id="maxgm-v164-news-risk">
 (function(){
 'use strict';
-const V='V1.6.8', BADGE='V1.6.8 · RECIPROCAL NEEDS', TITLE='MAX GM V1.6.8 — Reciprocal Needs Engine';
+const V='V1.6.9', BADGE='V1.6.9 · RECIPROCAL NEEDS+', TITLE='MAX GM V1.6.9 — Reciprocal Needs + Min Sacrifice';
 const $=id=>document.getElementById(id);
 const NEWS_KEY='maxgm-v164:news-cache', CHECK_KEY='maxgm-v164:last-news-check';
 const EMBEDDED={
@@ -2891,9 +2891,12 @@ function emergencyShortlist164(all){
  const add=x=>{const sig=x.tb+'|'+x.outs.map(r=>r.key).join(',')+'|'+x.ins.map(r=>r.key).join(',');if(used.has(sig)||out.length>=8)return false;const g=x.ins.find(r=>roles(r.p).has('P'))?.key||'';if((teamCount.get(x.tb)||0)>=2)return false;if(g&&(gkCount.get(g)||0)>=2)return false;used.add(sig);out.push(x);teamCount.set(x.tb,(teamCount.get(x.tb)||0)+1);if(g)gkCount.set(g,(gkCount.get(g)||0)+1);return true};
  // Prima prova a dare almeno un'opzione per ciascun formato disponibile.
  for(const n of [1,2,3]){const x=uniq.find(z=>z.n===n);if(x)add(x)}
+ // Poi riserva fino a due occasioni di bisogno reciproco a MINIMO SACRIFICIO, su controparti diverse.
+ const lowSac=uniq.filter(x=>x.n===1&&x.needLowSacrifice).sort((a,b)=>(b.reciprocalLeverage||0)-(a.reciprocalLeverage||0)||(b.oppNeedFit||0)-(a.oppNeedFit||0)||pv164(a.ta,a.outs[0])-pv164(b.ta,b.outs[0]));
+ const lowTeams=new Set();for(const x of lowSac){if(lowTeams.has(x.tb))continue;if(add(x))lowTeams.add(x.tb);if(lowTeams.size>=2)break}
  // Poi riserva una leva di bisogno reale della controparte.
  const mutual=uniq.slice().sort((a,b)=>(b.reciprocalLeverage||0)-(a.reciprocalLeverage||0)||(b.oppNeedFit||0)-(a.oppNeedFit||0)).find(x=>(x.oppNeedFit||0)>=62);if(mutual)add(mutual);
- // E una 1vs1 ad alta efficienza negoziale: bisogno reciproco alto con il minor sacrificio possibile.
+ // E una 1vs1 ad alta efficienza negoziale.
  const mutualEff=uniq.filter(x=>x.n===1&&(x.reciprocalLeverage||0)>=14).sort((a,b)=>(((b.reciprocalLeverage||0)+12)/Math.max(18,pv164(b.ta,b.outs[0])))-(((a.reciprocalLeverage||0)+12)/Math.max(18,pv164(a.ta,a.outs[0]))))[0];if(mutualEff)add(mutualEff);
  // Poi privilegia portieri e controparti diverse.
  for(const x of uniq){if(out.length>=8)break;add(x)}
@@ -2925,19 +2928,33 @@ function emergencyCandidates(team){
  const all=[],evaluated=new Set(),targets={1:3,2:3,3:2},caps={1:18,2:22,3:22};
  // V1.6.8: prima della classifica generale valuta proposte 1vs1 "bisogno reciproco" per ogni portiere/controparte.
  // Così un caso come Cacciamani → Perri non viene perso solo perché il costo d'asta storico o il valore grezzo lo tengono fuori dai primi candidati.
- const needSeedMap=new Map(),efficientSeedMap=new Map();
+ const needSeedMap=new Map(),efficientSeedMap=new Map(),pairRows=new Map(),lowSacTeamMap=new Map();
  for(const x of fast.filter(z=>z.n===1&&(z.q.oppNeed>=6||z.q.gkSurplus>=10))){
    const k=x.tb+'|'+x.gkKey,seedScore=x.q.effectiveParity*1.05+x.q.oppNeed*1.45+x.q.gkSurplus*.95+x.q.ourNeed*.30,old=needSeedMap.get(k);
    if(!old||seedScore>old.seedScore)needSeedMap.set(k,{...x,seedScore});
-   // Seconda via: miglior rapporto bisogno risolto / sacrificio. Evita che solo la E più forte venga proposta
-   // quando una E meno costosa (es. Cacciamani) è una leva negoziale più intelligente.
+   // Seconda via: rapporto bisogno/sacrificio.
    if(x.q.oppNeed>=9&&x.q.effectiveParity>=45){const sacrifice=pv164(team,x.outs[0]),efficiency=(x.q.oppNeed+x.q.gkSurplus*.55+8)/Math.max(18,sacrifice),eo=efficientSeedMap.get(k);if(!eo||efficiency>eo.efficiency)efficientSeedMap.set(k,{...x,efficiency})}
+   if(!pairRows.has(k))pairRows.set(k,[]);pairRows.get(k).push(x);
  }
- const seedRows=[...needSeedMap.values(),...efficientSeedMap.values()];
+ // V1.6.9 — terza via: MINIMO SACRIFICIO ADEGUATO.
+ // Per ogni portiere/controparte non scegliamo soltanto chi chiude di più il bisogno: conserviamo anche
+ // la pedina meno costosa tra quelle che chiudono almeno il 55% del miglior bisogno disponibile.
+ // Così una proposta come Cacciamani → Perri non viene oscurata da Moreira/Molina/Diouf solo perché
+ // questi alzano maggiormente la E di Soccy: Cacciamani risolve comunque una parte sostanziale del bisogno
+ // con un sacrificio inferiore per Aston.
+ for(const [k,rows] of pairRows){
+   const maxNeed=Math.max(0,...rows.map(x=>+x.q.oppNeed||0)),minAdequate=Math.max(7,maxNeed*.55);
+   const eligible=rows.filter(x=>(+x.q.oppNeed||0)>=minAdequate&&(+x.q.gkSurplus||0)>=8&&(+x.q.effectiveParity||0)>=18);
+   if(!eligible.length)continue;
+   eligible.sort((a,b)=>pv164(team,a.outs[0])-pv164(team,b.outs[0])||(+b.q.oppNeed||0)-(+a.q.oppNeed||0));
+   const x=eligible[0],sacrifice=pv164(team,x.outs[0]),opportunity=(+x.q.oppNeed||0)*1.65+(+x.q.gkSurplus||0)*1.15+(+x.q.effectiveParity||0)*.24-sacrifice*.16;
+   const old=lowSacTeamMap.get(x.tb);if(!old||opportunity>old.opportunity)lowSacTeamMap.set(x.tb,{...x,opportunity,lowSacrifice:true});
+ }
+ const seedRows=[...needSeedMap.values(),...efficientSeedMap.values(),...lowSacTeamMap.values()];
  for(const x of seedRows){
    const sig=x.tb+'|'+x.outs.map(r=>r.key).join(',')+'|'+x.ins.map(r=>r.key).join(',');if(evaluated.has(sig))continue;evaluated.add(sig);
    const ev=window.MAXGM_V15?.evaluateMulti?.(team,x.tb,x.outs.map(r=>r.key),x.ins.map(r=>r.key));if(!emergencySafe164(ev))continue;
-   ev.v164Type='1';ev.score=ev.emergencyScore;ev.realism=ev.emergencyRealism;ev.emergencyIncomingGk=x.gkKey;ev.needSeed=true;ev.needEfficient=Number.isFinite(x.efficiency);all.push(ev)
+   ev.v164Type='1';ev.score=ev.emergencyScore;ev.realism=ev.emergencyRealism;ev.emergencyIncomingGk=x.gkKey;ev.needSeed=true;ev.needEfficient=Number.isFinite(x.efficiency);ev.needLowSacrifice=!!x.lowSacrifice;all.push(ev)
  }
  for(const n of [1,2,3]){
    const rows=fast.filter(x=>x.n===n),perTeam=new Map();let checked=0,found=0;
@@ -2952,7 +2969,7 @@ function emergencyCandidates(team){
  }
  return emergencyShortlist164(all)
 }
-function gkCard(ev,i){const outs=ev.outs.map(r=>r.p.name).join(' + '),ins=ev.ins.map(r=>r.p.name).join(' + '),fmt=`${ev.n} VS ${ev.n}`,strict=ev.emergencyTier==='validated'||ev.validAutoEmergency||ev.validAuto;return `<div class="v164-gk-card"><div class="v164-gk-head"><div><div class="v164-kicker">${i===0?'SOLUZIONE PORTIERE PREFERITA':(strict?'ALTERNATIVA VALIDATA':'TRATTATIVA REALISTICA')}</div><div class="v164-gk-trade">${esc(outs)} <span style="color:#f1c75b">→</span> ${esc(ins)}</div><div class="tiny muted">con ${esc(ev.tb)}</div></div><div class="v164-gk-score">${Math.round(ev.score)}<small>QUALITÀ /100</small></div></div><div class="v164-gk-tags"><span class="v164-pill gold">${fmt}</span><span class="v164-pill good">XI ${fmtSigned(ev.xiNowDelta)}</span><span class="v164-pill ${strict?'good':'gold'}">${strict?'VALIDATA':'TRATTATIVA'}</span><span class="v164-pill">Realismo ${Math.round(ev.realism)}%</span></div><div class="v164-gk-reason">Obiettivo prioritario: uscire dall’emergenza portiere senza peggiorare in modo critico la struttura della rosa.${ev.oppNeedImpact?.bestClosure>=2?` <b>${esc(ev.tb)}</b> riceve una pedina che migliora <b>${esc(ev.oppNeedImpact.bestGroup)}</b> da ${ev.oppNeedImpact.bestBefore.toFixed(0)} a ${ev.oppNeedImpact.bestAfter.toFixed(0)}.${(ev.counterpartyGkSurplus||0)>=8?` Inoltre può liberare il portiere mantenendo ${ev.oppUsableAfter} portieri utilizzabili: leva di esubero ${Math.round(ev.counterpartyGkSurplus)}/40.`:''} Questo bisogno reciproco aumenta il realismo della trattativa.`:' La proposta resta filtrata anche dal beneficio per la controparte e dalla parità di mercato.'}</div><div class="market-card-actions"><button class="action secondary v164-eval" data-team="${encodeURIComponent(ev.tb)}" data-n="${ev.n}" data-out="${ev.outs.map(r=>r.key).join(',')}" data-in="${ev.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
+function gkCard(ev,i){const outs=ev.outs.map(r=>r.p.name).join(' + '),ins=ev.ins.map(r=>r.p.name).join(' + '),fmt=`${ev.n} VS ${ev.n}`,strict=ev.emergencyTier==='validated'||ev.validAutoEmergency||ev.validAuto,kicker=i===0?'SOLUZIONE PORTIERE PREFERITA':(ev.needLowSacrifice?'BISOGNO RECIPROCO · MINIMO SACRIFICIO':(strict?'ALTERNATIVA VALIDATA':'TRATTATIVA REALISTICA'));return `<div class="v164-gk-card"><div class="v164-gk-head"><div><div class="v164-kicker">${kicker}</div><div class="v164-gk-trade">${esc(outs)} <span style="color:#f1c75b">→</span> ${esc(ins)}</div><div class="tiny muted">con ${esc(ev.tb)}</div></div><div class="v164-gk-score">${Math.round(ev.score)}<small>QUALITÀ /100</small></div></div><div class="v164-gk-tags"><span class="v164-pill gold">${fmt}</span><span class="v164-pill good">XI ${fmtSigned(ev.xiNowDelta)}</span><span class="v164-pill ${strict?'good':'gold'}">${strict?'VALIDATA':'TRATTATIVA'}</span><span class="v164-pill">Realismo ${Math.round(ev.realism)}%</span></div><div class="v164-gk-reason">Obiettivo prioritario: uscire dall’emergenza portiere senza peggiorare in modo critico la struttura della rosa.${ev.oppNeedImpact?.bestClosure>=2?` <b>${esc(ev.tb)}</b> riceve una pedina che migliora <b>${esc(ev.oppNeedImpact.bestGroup)}</b> da ${ev.oppNeedImpact.bestBefore.toFixed(0)} a ${ev.oppNeedImpact.bestAfter.toFixed(0)}.${(ev.counterpartyGkSurplus||0)>=8?` Inoltre può liberare il portiere mantenendo ${ev.oppUsableAfter} portieri utilizzabili: leva di esubero ${Math.round(ev.counterpartyGkSurplus)}/40.`:''} Questo bisogno reciproco aumenta il realismo della trattativa.`:' La proposta resta filtrata anche dal beneficio per la controparte e dalla parità di mercato.'}</div><div class="market-card-actions"><button class="action secondary v164-eval" data-team="${encodeURIComponent(ev.tb)}" data-n="${ev.n}" data-out="${ev.outs.map(r=>r.key).join(',')}" data-in="${ev.ins.map(r=>r.key).join(',')}">VALUTA ${fmt}</button></div></div>`}
 function wireEval(root,team){root.querySelectorAll('.v164-eval').forEach(b=>b.onclick=()=>{const tb=decodeURIComponent(b.dataset.team),n=+b.dataset.n,outs=b.dataset.out.split(','),ins=b.dataset.in.split(',');document.querySelector('[data-view="trade"]')?.click();setTimeout(()=>{if(n===1){$('tradeTeamA').value=team;$('tradeTeamB').value=tb;setupTrade();$('tradePlayerA').value=outs[0];$('tradePlayerB').value=ins[0];analyzeTrade()}else{window.MAXGM_V15?.setMultiForm?.(team,tb,n,outs,ins);$('v15Evaluate')?.click()}},150)})}
 function findKeeperSolutions164(team){
  const market=$('market'),out=$('marketOutput'),st=$('marketStatus');if(!out)return;const r=keeperRisk(team);if(!r.outs.length){out.innerHTML='<div class="smart-empty"><b>Nessun portiere OUT rilevato.</b><br>Il reparto non richiede uno scambio d’emergenza.</div>';return}
@@ -3004,10 +3021,10 @@ Object.assign(window.MAXGM_V164,{version:V,booting:false,newsFor,keeperRisk,refr
    R.tests.push({name:'cross_role_gk_allowed',pass:!!ev?.gkSafe&&ev?.legalA&&ev?.legalB});
    R.tests.push({name:'soccy_need_is_E',pass:ev?.oppNeedImpact?.bestGroup==='E'&&ev?.oppNeedImpact?.bestClosure>0});
    R.tests.push({name:'perri_cacciamani_targeted_visible',pass:!!hitT});
-   R.tests.push({name:'perri_cacciamani_emergency_visible',pass:!!hitE});R.tests.push({name:'perri_cacciamani_reciprocal_leverage',pass:!!hitE&&(+hitE.reciprocalLeverage||0)>0&&(+hitE.counterpartyGkSurplus||0)>=8});
+   R.tests.push({name:'perri_cacciamani_emergency_visible',pass:!!hitE});R.tests.push({name:'perri_cacciamani_min_sacrifice_seed',pass:!!hitE&&!!hitE.needLowSacrifice});R.tests.push({name:'perri_cacciamani_reciprocal_leverage',pass:!!hitE&&(+hitE.reciprocalLeverage||0)>0&&(+hitE.counterpartyGkSurplus||0)>=8});
    R.ok=R.tests.every(x=>x.pass);
   }catch(e){R.ok=false;R.error=String(e?.stack||e)}
-  const pre=document.createElement('pre');pre.id='v167testResult';pre.textContent=JSON.stringify(R,null,2);pre.style='white-space:pre-wrap;background:#000;color:#fff;padding:12px;position:relative;z-index:99999';document.body.appendChild(pre);document.title='V168TEST '+(R.ok?'OK':'FAIL');
+  const pre=document.createElement('pre');pre.id='v167testResult';pre.textContent=JSON.stringify(R,null,2);pre.style='white-space:pre-wrap;background:#000;color:#fff;padding:12px;position:relative;z-index:99999';document.body.appendChild(pre);document.title='V169TEST '+(R.ok?'OK':'FAIL');
  });
 })();
 </script>
