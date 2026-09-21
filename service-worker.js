@@ -1,4 +1,4 @@
-const CACHE = 'max-gm-v1.6.5';
+const CACHE = 'max-gm-v1.6.6';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('message', event => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
