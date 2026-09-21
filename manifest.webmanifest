@@ -1,8 +1,8 @@
 {
-  "name": "MAX GM V1.6.7",
+  "name": "MAX GM V1.6.8",
   "short_name": "MAX GM",
-  "description": "MAX GM — Motore bisogni controparte, news aware, emergenza portiere, rose dinamiche e scambi 1vs1/2vs2/3vs3.",
-  "start_url": "./?app=1.6.7",
+  "description": "MAX GM — Motore bisogni reciproci e surplus controparte, news aware, emergenza portiere, rose dinamiche e scambi 1vs1/2vs2/3vs3.",
+  "start_url": "./?app=1.6.8",
   "scope": "./",
   "display": "standalone",
   "background_color": "#07111f",
