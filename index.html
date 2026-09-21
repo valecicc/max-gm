@@ -2767,20 +2767,52 @@ function headerMap161(row){
 function rowsFromWorkbook161(wb,XLSX){
  const out=[];
  const add=(team,name,cost=0)=>{team=String(team??'').trim();name=String(name??'').trim();if(!team||!name)return;out.push({team,name,acquisitionCost:Number(String(cost??0).replace(',','.'))||0})};
+ const isTotal=v=>['totale','total','tot'].includes(norm161(v));
+ const isCostHeader=v=>['costo','prezzo','crediti','costo asta','prezzo asta'].includes(norm161(v));
  for(const sheetName of wb.SheetNames||[]){
   const ws=wb.Sheets[sheetName];if(!ws)continue;
   const matrix=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:false});if(!matrix.length)continue;
   const sheetTeam=matchTeam161(sheetName);let parsed=false;
+
+  // Formato ufficiale export Leghe Fantacalcio: tutte le squadre affiancate nello stesso foglio.
+  // Esempio riga 1: Ingiocabili | costo | [vuoto] | Real Studio 7 | costo | [vuoto] | ...
+  for(let h=0;h<Math.min(12,matrix.length);h++){
+   const head=matrix[h]||[],blocks=[];
+   for(let c=0;c<head.length;c++){
+    const team=matchTeam161(head[c]);if(!team)continue;
+    let costCol=-1;
+    for(let k=c+1;k<=Math.min(c+2,head.length-1);k++){if(isCostHeader(head[k])){costCol=k;break}}
+    // Accetta anche export senza etichetta costo: la colonna immediatamente successiva resta il costo.
+    if(costCol<0)costCol=c+1;
+    blocks.push({team,playerCol:c,costCol});
+   }
+   // Due o più squadre sulla stessa riga identificano in modo affidabile il layout Fantacalcio orizzontale.
+   if(blocks.length>=2){
+    for(let r=h+1;r<matrix.length;r++){
+     const row=matrix[r]||[];
+     for(const b of blocks){
+      const name=String(row[b.playerCol]??'').trim();if(!name||isTotal(name))continue;
+      // Evita di interpretare come giocatore eventuali intestazioni ripetute o nomi squadra.
+      if(matchTeam161(name)||isCostHeader(name))continue;
+      add(b.team,name,row[b.costCol]??0)
+     }
+    }
+    parsed=true;break
+   }
+  }
+  if(parsed)continue;
+
   // Formato tabellare classico: individua l'intestazione nelle prime 15 righe.
   for(let h=0;h<Math.min(15,matrix.length);h++){
    const M=headerMap161(matrix[h]);if(M.player<0)continue;if(M.team<0&&!sheetTeam)continue;
    for(let r=h+1;r<matrix.length;r++){
     const row=matrix[r]||[],team=M.team>=0?row[M.team]:sheetTeam,name=row[M.player];
-    if(String(team??'').trim()&&String(name??'').trim())add(team,name,M.cost>=0?row[M.cost]:0)
+    if(String(team??'').trim()&&String(name??'').trim()&&!isTotal(name))add(team,name,M.cost>=0?row[M.cost]:0)
    }
    parsed=true;break
   }
   if(parsed)continue;
+
   // Formato a sezioni: una riga con il nome squadra, seguita dai giocatori.
   let currentTeam=sheetTeam;
   for(const row of matrix){
@@ -2788,11 +2820,11 @@ function rowsFromWorkbook161(wb,XLSX){
    for(const v of vals){const t=matchTeam161(v);if(t){currentTeam=t;break}}
    if(!currentTeam)continue;
    let found=null;
-   for(const v of vals){const ks=P161.get(norm161(v))||[];if(ks.length===1){found={name:v,key:ks[0]};break}}
+   for(const v of vals){if(isTotal(v))continue;const ks=P161.get(norm161(v))||[];if(ks.length===1){found={name:v,key:ks[0]};break}}
    if(found)add(currentTeam,found.name,0)
   }
  }
- if(!out.length)throw new Error('Nessuna rosa riconosciuta nel file Excel. Usa colonne Squadra/Giocatore oppure un foglio per squadra.');
+ if(!out.length)throw new Error('Nessuna rosa riconosciuta nel file Excel. Sono supportati export Fantacalcio affiancati, colonne Squadra/Giocatore e un foglio per squadra.');
  return out;
 }
 async function rowsFromExcel161(file){
@@ -2829,7 +2861,7 @@ async function previewImport161(file){
  }catch(e){pendingImport161=null;setStatus161(`<b>File non importato.</b> ${String(e.message||e)}`,'bad')}
 }
 function applyImport161(){if(!pendingImport161)return;const before=clone161(LEAGUES[activeLeague].rosters);pushHistory161(before,{source:'Import file',label:'Aggiornamento rose da file'});saveRosters161(pendingImport161,{source:'Import file'});pendingImport161=null;refresh161();setStatus161('<b>File applicato.</b> Tutte le sezioni di MAX GM usano ora le rose importate.','good')}
-function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.7.0 · XLSX / CSV / JSON</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file Excel / XLSX / XLS / CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">Excel/CSV: colonne consigliate <b>Squadra</b>, <b>Giocatore</b> e facoltativa <b>Costo</b>. Sono riconosciuti anche sinonimi comuni (Team, Fantasquadra, Calciatore, Player, Prezzo, Crediti). Se ogni squadra è in un foglio separato, MAX GM può usare il nome del foglio come squadra. Prima dell’applicazione mostra sempre errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file Excel, XLSX, XLS, CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
+function installManager161(){const sec=$161('league');if(!sec||$161('v161Manager'))return;const card=document.createElement('div');card.id='v161Manager';card.className='card v161-manager';card.innerHTML=`<div class="v161-manager-head"><div><h2>Gestione rose</h2><div class="tiny muted">Registra scambi conclusi, importa un file o annulla l’ultima modifica. Le rose cambiano subito in tutto MAX GM.</div></div><span class="v161-source-badge">V1.7.1 · FANTACALCIO XLSX / CSV / JSON</span></div><div class="v161-manager-grid"><div class="control"><label>Squadra A</label><select id="v161TeamA"></select></div><div class="control"><label>Squadra B</label><select id="v161TeamB"></select></div><div class="control"><label>Formato</label><select id="v161Size"><option value="1">1 VS 1</option><option value="2">2 VS 2</option><option value="3">3 VS 3</option></select></div></div><div class="v161-sides"><div class="v161-side"><div class="v161-side-title">SQUADRA A CEDE</div><div><select id="v161Out1"></select></div><div><select id="v161Out2"></select></div><div><select id="v161Out3"></select></div></div><div class="v161-arrow">⇄</div><div class="v161-side"><div class="v161-side-title">SQUADRA B CEDE</div><div><select id="v161In1"></select></div><div><select id="v161In2"></select></div><div><select id="v161In3"></select></div></div></div><div class="v161-manager-actions"><button class="action" id="v161Apply">REGISTRA SCAMBIO</button><button class="action secondary" id="v161Undo">ANNULLA ULTIMA MODIFICA</button></div><div id="v161Status" class="v161-status">Le rose incluse nell’app restano intatte finché non confermi una modifica.</div><details class="v161-import"><summary>Importa rose da file Excel / XLSX / XLS / CSV / JSON</summary><div class="v161-import-line"><input id="v161File" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json"><button class="action secondary" id="v161PreviewFile">CONTROLLA FILE</button></div><div class="tiny muted" style="margin-top:7px">Supportato direttamente anche l’<b>export ufficiale Leghe Fantacalcio</b> con le squadre affiancate nello stesso foglio (Squadra | costo | …). Restano supportati anche file con colonne <b>Squadra</b>, <b>Giocatore</b>, <b>Costo</b> e un foglio separato per squadra. Prima dell’applicazione MAX GM mostra sempre errori e movimenti rilevati.</div></details><div class="v161-history" id="v161History"></div>`;const sync=$161('v16SyncCard');if(sync)sync.insertAdjacentElement('afterend',card);else sec.insertBefore(card,sec.firstChild);refreshManagerSelectors161();$161('v161TeamA').onchange=populateManagerPlayers161;$161('v161TeamB').onchange=populateManagerPlayers161;$161('v161Size').onchange=updateManagerSize161;$161('v161Apply').onclick=handleManual161;$161('v161Undo').onclick=()=>{if(!confirm('Annullare l’ultima modifica alle rose?'))return;const r=undo161();setStatus161(r.ok?`Ripristinata la situazione precedente a: <b>${r.label}</b>.`:r.error,r.ok?'good':'warn')};$161('v161PreviewFile').onclick=()=>{const f=$161('v161File').files?.[0];if(!f){setStatus161('Seleziona prima un file Excel, XLSX, XLS, CSV o JSON.','warn');return}previewImport161(f)};renderHistory161()}
 function refreshTarget161(){const team=$161('marketTeam')?.value||DEFAULT_TEAM,p=$161('v16MarketPlayer'),o=$161('v16MarketOpponent');if(p){const keep=p.value;p.innerHTML='<option value="">QUALSIASI GIOCATORE</option>'+roster(team).slice().sort((a,b)=>baseRating(b.p)-baseRating(a.p)).map(r=>`<option value="${r.key}">${r.p.name} · ${r.p.role}</option>`).join('');if([...p.options].some(x=>x.value===keep))p.value=keep}if(o){const keep=o.value;o.innerHTML='<option value="">QUALSIASI SQUADRA</option>'+TEAM_NAMES.filter(t=>t!==team).map(t=>`<option value="${encodeURIComponent(t)}">${t}</option>`).join('');if([...o.options].some(x=>x.value===keep))o.value=keep}}
 function injectDone161(){const root=$161('marketOutput');if(!root)return;root.querySelectorAll('[data-v16-team],[data-v15-team]').forEach(b=>{if(b.parentElement?.querySelector('.v161-done'))return;const d=document.createElement('button');d.className='action secondary v161-done';d.textContent='SCAMBIO CONCLUSO';for(const k of ['team','n','out','in']){const v=b.dataset['v16'+k.charAt(0).toUpperCase()+k.slice(1)]??b.dataset['v15'+k.charAt(0).toUpperCase()+k.slice(1)];if(v!=null)d.dataset[k]=v}b.insertAdjacentElement('afterend',d)})}
 function wireDone161(){document.addEventListener('click',e=>{const b=e.target.closest('.v161-done');if(!b)return;const team=$161('marketTeam')?.value||DEFAULT_TEAM,tb=decodeURIComponent(b.dataset.team||''),outs=(b.dataset.out||'').split(',').filter(Boolean),ins=(b.dataset.in||'').split(',').filter(Boolean);if(!tb||!outs.length||outs.length!==ins.length){alert('Dati dello scambio incompleti.');return}if(!confirm(`Segnare come CONCLUSO ${outs.map(playerName161).join(' + ')} ⇄ ${ins.map(playerName161).join(' + ')} con ${tb}?`))return;const r=applyTrade161(team,tb,outs,ins,'Scambio concluso da MAX GM');alert(r.ok?'Rose aggiornate in tutto MAX GM.':r.error)})}
@@ -2870,7 +2902,7 @@ window.MAXGM_V161={version:V161,applyTrade:applyTrade161,undo:undo161,selfTest:s
 <script id="maxgm-v164-news-risk">
 (function(){
 'use strict';
-const V='V1.7.0', BADGE='V1.7.0 · EXCEL ROSTERS + RECIPROCAL NEEDS', TITLE='MAX GM V1.7.0 — Excel Roster Import + Reciprocal Needs';
+const V='V1.7.1', BADGE='V1.7.1 · FANTACALCIO XLSX + RECIPROCAL NEEDS', TITLE='MAX GM V1.7.1 — Fantacalcio Excel Import + Reciprocal Needs';
 const $=id=>document.getElementById(id);
 const NEWS_KEY='maxgm-v164:news-cache', CHECK_KEY='maxgm-v164:last-news-check';
 const EMBEDDED={
